@@ -126,6 +126,10 @@ body {
 .bg-blue-800 { background-color: var(--ide-panel-hover) !important; }
 .border-blue-800,
 .border-blue-700 { border-color: var(--ide-border) !important; }
+.border-blue-800\/50 { border-color: var(--ide-border) !important; }
+.text-blue-600,
+.text-blue-500,
+.text-blue-400 { color: var(--ide-muted) !important; }
 .text-sky-400,
 .text-sky-300,
 .text-sky-200 { color: var(--ide-muted) !important; }
