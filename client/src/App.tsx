@@ -241,6 +241,7 @@ export default function App() {
                 token={token}
                 onSave={handleSaveFile}
                 onDirtyChange={setEditorDirty}
+                visible={rightTab === "editor"}
               />
             </div>
           </div>
