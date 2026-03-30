@@ -1,13 +1,16 @@
 import { useState, useCallback, useEffect } from "react";
 import { FileExplorer } from "./components/FileExplorer";
 import { Terminal } from "./components/Terminal";
+import { CodeEditor } from "./components/CodeEditor";
+import { EditorTabs } from "./components/EditorTabs";
 import { LoginScreen } from "./components/LoginScreen";
 import { PreviewWindow } from "./components/PreviewWindow";
 import { ThemeCustomizer } from "./components/ThemeCustomizer";
 import { applyTheme, DEFAULT_THEME, IdeTheme, loadTheme, saveTheme } from "./theme";
+import { FsEntry } from "./types";
 
-type RightTab = "terminal" | "theme";
-type MobileTab = "files" | "terminal" | "theme";
+type RightTab = "terminal" | "theme" | "editor";
+type MobileTab = "files" | "terminal" | "theme" | "editor";
 
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("auth_token") || "");
@@ -20,6 +23,8 @@ export default function App() {
   const [rightTab, setRightTab] = useState<RightTab>("terminal");
   const [mobileTab, setMobileTab] = useState<MobileTab>("files");
   const [theme, setTheme] = useState<IdeTheme>(() => loadTheme());
+  const [openFile, setOpenFile] = useState<FsEntry | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
 
   useEffect(() => {
     applyTheme(theme);
@@ -62,6 +67,33 @@ export default function App() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  const handleOpenFile = useCallback((entry: FsEntry) => {
+    setOpenFile(entry);
+    setEditorDirty(false);
+    setRightTab("editor");
+    if (isMobile) setMobileTab("editor");
+  }, [isMobile]);
+
+  const handleCloseEditor = useCallback(() => {
+    if (editorDirty && !confirm("Tienes cambios sin guardar. ¿Cerrar de todos modos?")) return;
+    setOpenFile(null);
+    setEditorDirty(false);
+    setRightTab("terminal");
+  }, [editorDirty]);
+
+  const handleSaveFile = useCallback(async (filePath: string, content: string) => {
+    const res = await fetch("/api/fs/write", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ path: filePath, content }),
+    });
+    const data = await res.json();
+    if (!data.ok) alert(data.error);
+  }, [token]);
+
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -97,6 +129,20 @@ export default function App() {
         >
           Archivos
         </button>
+        {openFile && (
+          <button
+            onClick={() => {
+              setRightTab("editor");
+              setMobileTab("editor");
+            }}
+            className={`px-2.5 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
+              mobileTab === "editor" ? "ide-tab-active" : "ide-tab"
+            }`}
+          >
+            Editor
+            {editorDirty && <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />}
+          </button>
+        )}
         <button
           onClick={() => {
             setRightTab("terminal");
@@ -132,7 +178,7 @@ export default function App() {
         className={`${mobileTab === "files" ? "flex" : "hidden"} md:flex h-full overflow-hidden flex-col ide-panel`}
         style={!isMobile ? { width: `${dividerX}%` } : undefined}
       >
-        <FileExplorer token={token} />
+        <FileExplorer token={token} onOpenFile={handleOpenFile} />
       </div>
 
       <div className="hidden md:block w-1.5 cursor-col-resize ide-divider shrink-0" onMouseDown={handleDragStart} />
@@ -143,6 +189,17 @@ export default function App() {
       >
         <div className="hidden md:flex px-4 py-2 border-b ide-border ide-panel-soft items-center gap-2">
           <div className="flex items-center gap-1">
+            {openFile && (
+              <button
+                onClick={() => setRightTab("editor")}
+                className={`px-2.5 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
+                  rightTab === "editor" ? "ide-tab-active" : "ide-tab"
+                }`}
+              >
+                Editor
+                {editorDirty && <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />}
+              </button>
+            )}
             <button
               onClick={() => setRightTab("terminal")}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${
@@ -176,6 +233,17 @@ export default function App() {
         </div>
 
         <div className="flex-1 min-h-0">
+          <div className={rightTab === "editor" ? "h-full flex flex-col" : "hidden"}>
+            <EditorTabs file={openFile} dirty={editorDirty} onClose={handleCloseEditor} />
+            <div className="flex-1 min-h-0">
+              <CodeEditor
+                file={openFile}
+                token={token}
+                onSave={handleSaveFile}
+                onDirtyChange={setEditorDirty}
+              />
+            </div>
+          </div>
           <div className={rightTab === "terminal" ? "h-full" : "hidden"}>
             <Terminal token={token} />
           </div>

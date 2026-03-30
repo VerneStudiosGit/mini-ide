@@ -145,3 +145,28 @@ body {
 .hover\:bg-blue-800:hover { background-color: var(--ide-panel-hover) !important; }
 .hover\:border-sky-500\/50:hover,
 .hover\:border-sky-500:hover { border-color: var(--ide-accent) !important; }
+
+/* CodeMirror overrides for Tailwind preflight compatibility */
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.cm-editor .cm-content {
+  padding: 8px 0;
+}
+
+.cm-editor .cm-gutters {
+  min-width: 40px;
+}
+
+.cm-editor.cm-focused {
+  outline: none !important;
+}
+
+.hover\:bg-blue-800\/50:hover { background-color: var(--ide-panel-hover) !important; }
+.bg-blue-800\/60 { background-color: var(--ide-panel-hover) !important; }
+.bg-blue-700 { background-color: var(--ide-accent) !important; }

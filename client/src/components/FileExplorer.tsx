@@ -1,41 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { FilePreviewModal } from "./FilePreviewModal";
+import { FileTreeView } from "./FileTreeView";
 import { ContextMenu } from "./ContextMenu";
+import { FsEntry } from "../types";
+import { getFileType, formatSize } from "../utils/fileUtils";
 
-interface FsEntry {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  size: number;
-  modified: string;
-}
-
-const TEXT_EXTENSIONS = new Set([
-  "txt", "md", "js", "ts", "tsx", "jsx", "json", "css", "html", "xml",
-  "yaml", "yml", "toml", "sh", "bash", "py", "rb", "go", "rs", "java",
-  "c", "cpp", "h", "hpp", "sql", "env", "gitignore", "dockerfile",
-  "makefile", "csv", "log", "cfg", "ini", "conf", "properties", "lock",
-  "prisma", "graphql", "tf", "hcl",
-]);
-
-const IMAGE_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico",
-]);
-
-function getFileType(filename: string): "text" | "image" | "other" {
-  const ext = filename.split(".").pop()?.toLowerCase() || "";
-  if (TEXT_EXTENSIONS.has(ext)) return "text";
-  if (IMAGE_EXTENSIONS.has(ext)) return "image";
-  if (!filename.includes(".")) return "text";
-  return "other";
-}
-
-function formatSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
-}
+type ViewMode = "grid" | "tree";
 
 function FolderIcon() {
   return (
@@ -91,15 +61,19 @@ interface ContextMenuState {
 
 interface FileExplorerProps {
   token: string;
+  onOpenFile?: (entry: FsEntry) => void;
 }
 
-export function FileExplorer({ token }: FileExplorerProps) {
+export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
   const [currentPath, setCurrentPath] = useState("/");
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<FsEntry | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [showNewMenu, setShowNewMenu] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    (localStorage.getItem("mini-ide-view-mode") as ViewMode) || "grid"
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
 
@@ -149,15 +123,25 @@ export function FileExplorer({ token }: FileExplorerProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showNewMenu]);
 
+  const handleToggleView = useCallback((mode: ViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem("mini-ide-view-mode", mode);
+  }, []);
+
   const handleDoubleClick = useCallback(
     (entry: FsEntry) => {
       if (entry.type === "directory") {
         loadDir(entry.path);
       } else {
-        setSelectedFile(entry);
+        const fileType = getFileType(entry.name);
+        if (fileType === "text" && onOpenFile) {
+          onOpenFile(entry);
+        } else {
+          setSelectedFile(entry);
+        }
       }
     },
-    [loadDir]
+    [loadDir, onOpenFile]
   );
 
   const handleContextMenu = useCallback(
@@ -366,6 +350,28 @@ export function FileExplorer({ token }: FileExplorerProps) {
         <span className="text-sm font-semibold tracking-wide text-sky-300">Archivos</span>
         <div className="flex-1" />
 
+        {/* View toggle */}
+        <div className="flex items-center gap-0.5 bg-blue-800/50 rounded p-0.5">
+          <button
+            onClick={() => handleToggleView("grid")}
+            className={`p-1 rounded transition-colors ${viewMode === "grid" ? "bg-blue-700 text-sky-300" : "text-blue-400 hover:text-sky-300"}`}
+            title="Vista de cuadricula"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => handleToggleView("tree")}
+            className={`p-1 rounded transition-colors ${viewMode === "tree" ? "bg-blue-700 text-sky-300" : "text-blue-400 hover:text-sky-300"}`}
+            title="Vista de arbol"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+            </svg>
+          </button>
+        </div>
+
         {/* Reload button */}
         <button
           onClick={() => loadDir(currentPath)}
@@ -435,76 +441,97 @@ export function FileExplorer({ token }: FileExplorerProps) {
         />
       </div>
 
-      {/* Breadcrumb navigation */}
-      <div className="px-4 py-2 bg-blue-900/50 border-b border-blue-800 flex items-center gap-1 text-sm overflow-x-auto shrink-0">
-        <button
-          onClick={goUp}
-          className="px-2 py-0.5 rounded hover:bg-blue-800 text-sky-300 transition-colors shrink-0"
-          title="Subir un nivel"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <button
-          onClick={() => loadDir("/")}
-          className="px-1 hover:text-sky-300 text-sky-400 transition-colors shrink-0"
-        >
-          /
-        </button>
-        {breadcrumbs.map((seg, i) => {
-          const segPath = "/" + breadcrumbs.slice(0, i + 1).join("/");
-          return (
-            <span key={segPath} className="flex items-center gap-1 shrink-0">
-              <span className="text-blue-600">/</span>
-              <button
-                onClick={() => loadDir(segPath)}
-                className="hover:text-sky-300 text-sky-400 transition-colors"
-              >
-                {seg}
-              </button>
-            </span>
-          );
-        })}
-      </div>
-
-      {/* Grid */}
-      <div className="flex-1 overflow-auto p-4">
-        {loading ? (
-          <div className="flex items-center justify-center h-32 text-sky-400">
-            Cargando...
-          </div>
-        ) : entries.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-blue-400">
-            Directorio vacio
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-            {entries.map((entry) => (
-              <button
-                key={entry.path}
-                onDoubleClick={() => handleDoubleClick(entry)}
-                onContextMenu={(e) => handleContextMenu(e, entry)}
-                className="flex flex-col items-center gap-2 p-3 rounded-lg bg-blue-900/40 border border-blue-800/50 hover:bg-blue-800/60 hover:border-sky-500/50 transition-all cursor-pointer group"
-              >
-                {entry.type === "directory" ? (
-                  <FolderIcon />
-                ) : (
-                  <FileIcon filename={entry.name} />
-                )}
-                <span className="text-xs text-center text-white truncate w-full group-hover:text-sky-200">
-                  {entry.name}
+      {viewMode === "grid" ? (
+        <>
+          {/* Breadcrumb navigation */}
+          <div className="px-4 py-2 bg-blue-900/50 border-b border-blue-800 flex items-center gap-1 text-sm overflow-x-auto shrink-0">
+            <button
+              onClick={goUp}
+              className="px-2 py-0.5 rounded hover:bg-blue-800 text-sky-300 transition-colors shrink-0"
+              title="Subir un nivel"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <button
+              onClick={() => loadDir("/")}
+              className="px-1 hover:text-sky-300 text-sky-400 transition-colors shrink-0"
+            >
+              /
+            </button>
+            {breadcrumbs.map((seg, i) => {
+              const segPath = "/" + breadcrumbs.slice(0, i + 1).join("/");
+              return (
+                <span key={segPath} className="flex items-center gap-1 shrink-0">
+                  <span className="text-blue-600">/</span>
+                  <button
+                    onClick={() => loadDir(segPath)}
+                    className="hover:text-sky-300 text-sky-400 transition-colors"
+                  >
+                    {seg}
+                  </button>
                 </span>
-                {entry.type === "file" && (
-                  <span className="text-[10px] text-blue-400">
-                    {formatSize(entry.size)}
-                  </span>
-                )}
-              </button>
-            ))}
+              );
+            })}
           </div>
-        )}
-      </div>
+
+          {/* Grid */}
+          <div className="flex-1 overflow-auto p-4">
+            {loading ? (
+              <div className="flex items-center justify-center h-32 text-sky-400">
+                Cargando...
+              </div>
+            ) : entries.length === 0 ? (
+              <div className="flex items-center justify-center h-32 text-blue-400">
+                Directorio vacio
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                {entries.map((entry) => (
+                  <button
+                    key={entry.path}
+                    onDoubleClick={() => handleDoubleClick(entry)}
+                    onContextMenu={(e) => handleContextMenu(e, entry)}
+                    className="flex flex-col items-center gap-2 p-3 rounded-lg bg-blue-900/40 border border-blue-800/50 hover:bg-blue-800/60 hover:border-sky-500/50 transition-all cursor-pointer group"
+                  >
+                    {entry.type === "directory" ? (
+                      <FolderIcon />
+                    ) : (
+                      <FileIcon filename={entry.name} />
+                    )}
+                    <span className="text-xs text-center text-white truncate w-full group-hover:text-sky-200">
+                      {entry.name}
+                    </span>
+                    {entry.type === "file" && (
+                      <span className="text-[10px] text-blue-400">
+                        {formatSize(entry.size)}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        /* Tree view */
+        <FileTreeView
+          token={token}
+          rootPath="/data"
+          onOpenFile={(entry) => {
+            const fileType = getFileType(entry.name);
+            if (fileType === "text" && onOpenFile) {
+              onOpenFile(entry);
+            } else {
+              setSelectedFile(entry);
+            }
+          }}
+          onSelectFile={() => {}}
+          contextMenuItems={getContextMenuItems}
+          onReload={() => loadDir(currentPath)}
+        />
+      )}
 
       {/* Context menu */}
       {contextMenu && (

@@ -1,12 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-
-interface FsEntry {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  size: number;
-  modified: string;
-}
+import { FsEntry } from "../types";
 
 interface Props {
   file: FsEntry;
