@@ -13,8 +13,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude Code CLI and OpenAI Codex CLI
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 # Create user "mini-ide" with full sudo permissions
 RUN useradd -m -s /bin/bash -G sudo mini-ide \
