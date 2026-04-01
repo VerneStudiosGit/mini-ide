@@ -6,22 +6,50 @@ interface PreviewWindowProps {
   onClose: () => void;
 }
 
+function normalizePreviewUrl(rawInput: string): string {
+  const input = rawInput.trim();
+  if (!input) return DEFAULT_URL;
+
+  if (/^\d{1,5}$/.test(input)) {
+    return `/_preview/${input}/`;
+  }
+
+  const ensureScheme = (value: string) =>
+    /^https?:\/\//i.test(value) ? value : `http://${value}`;
+
+  try {
+    const parsed = new URL(ensureScheme(input));
+    const isLocalHost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    if (isLocalHost && parsed.port) {
+      const path = parsed.pathname || "/";
+      return `/_preview/${parsed.port}${path}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    // keep raw input handling below
+  }
+
+  if (/^https?:\/\//i.test(input)) return input;
+  return `https://${input}`;
+}
+
 export function PreviewWindow({ onClose }: PreviewWindowProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [url, setUrl] = useState(DEFAULT_URL);
 
   const handleRefresh = useCallback(() => {
     if (iframeRef.current) {
-      iframeRef.current.src = url;
+      iframeRef.current.src = normalizePreviewUrl(url);
     }
   }, [url]);
 
   const handleUrlSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
+      const normalized = normalizePreviewUrl(url);
       if (iframeRef.current) {
-        iframeRef.current.src = url;
+        iframeRef.current.src = normalized;
       }
+      setUrl(normalized);
     },
     [url]
   );
@@ -72,6 +100,7 @@ export function PreviewWindow({ onClose }: PreviewWindowProps) {
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            placeholder="localhost:5173 o https://ejemplo.com"
             className="w-full px-3 py-1.5 rounded-lg text-sm font-mono border ide-border ide-panel ide-text focus:outline-none"
           />
         </form>

@@ -31,6 +31,11 @@ export default function App() {
     saveTheme(theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (!token) return;
+    document.cookie = `mini_ide_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
+  }, [token]);
+
   // Apply branding (icon + title) to DOM
   const applyBranding = useCallback(async () => {
     try {

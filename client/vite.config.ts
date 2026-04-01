@@ -6,6 +6,10 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": "http://localhost:3000",
+      "/_preview": {
+        target: "http://localhost:3000",
+        ws: true,
+      },
       "/ws": {
         target: "ws://localhost:3000",
         ws: true,

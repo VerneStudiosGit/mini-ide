@@ -6,8 +6,9 @@ import { fileURLToPath } from "url";
 import cors from "cors";
 import { spawnTerminal } from "./terminal";
 import { filesystemRouter } from "./filesystem";
-import { authRouter, requireAuth, isValidToken } from "./auth";
+import { authRouter, requireAuth, isValidToken, getTokenFromAuthSources } from "./auth";
 import { brandingRouter, generateManifest } from "./branding";
+import { previewHttpProxy, proxyPreviewWebSocket } from "./previewProxy";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +27,9 @@ app.use("/api/fs", requireAuth, filesystemRouter);
 
 // Branding routes (public reads, auth-protected writes)
 app.use("/api/branding", brandingRouter);
+
+// Internal preview proxy for local ports
+app.use("/_preview/:port", requireAuth, previewHttpProxy);
 
 // Serve client static files in production
 const clientDist = path.join(__dirname, "../client/dist");
@@ -57,6 +61,29 @@ wss.on("connection", (ws, req) => {
   }
 
   spawnTerminal(ws);
+});
+
+server.on("upgrade", (req, socket, head) => {
+  const isPreviewPath = (req.url || "").startsWith("/_preview/");
+  if (!isPreviewPath) return;
+
+  const url = new URL(req.url || "", `http://${req.headers.host}`);
+  const token = getTokenFromAuthSources(
+    req.headers.authorization,
+    req.headers.cookie,
+    url.searchParams.get("token") || ""
+  );
+  if (!isValidToken(token)) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  const handled = proxyPreviewWebSocket(req, socket, head);
+  if (!handled) {
+    socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy();
+  }
 });
 
 const PORT = process.env.PORT || 3000;
