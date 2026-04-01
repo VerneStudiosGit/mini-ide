@@ -41,9 +41,12 @@ let nextId = 1;
 
 export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ token }, ref) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const overlayTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionsRef = useRef<TermSession[]>([]);
   const [sessions, setSessions] = useState<{ id: number; name: string; connected: boolean }[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
+  const [showInputOverlay, setShowInputOverlay] = useState(false);
+  const [overlayText, setOverlayText] = useState("");
 
   const connectSession = useCallback((session: TermSession) => {
     if (session.ws) {
@@ -184,6 +187,23 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     },
   }));
 
+  useEffect(() => {
+    if (!showInputOverlay) return;
+    requestAnimationFrame(() => {
+      overlayTextareaRef.current?.focus();
+    });
+  }, [showInputOverlay]);
+
+  const submitOverlayText = useCallback(() => {
+    if (!overlayText.trim()) {
+      setShowInputOverlay(false);
+      return;
+    }
+    sendToActive(overlayText);
+    setOverlayText("");
+    setShowInputOverlay(false);
+  }, [overlayText, sendToActive]);
+
   // Show/hide terminal containers based on active tab
   useEffect(() => {
     for (const session of sessionsRef.current) {
@@ -216,7 +236,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col relative">
       {/* Terminal tabs + toolbar */}
       <div className="flex items-center gap-1 px-2 py-1 bg-blue-900/60 border-b border-blue-800 shrink-0 overflow-x-auto">
         {/* Terminal tabs */}
@@ -259,6 +279,18 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         </button>
 
         <div className="w-px h-4 bg-blue-700 mx-1 shrink-0" />
+
+        {/* Quick input overlay button */}
+        <button
+          onClick={() => setShowInputOverlay(true)}
+          className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors shrink-0"
+          title="Abrir input rapido"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h10m-10 6h16" />
+          </svg>
+          Input
+        </button>
 
         {/* Claude button */}
         <button
@@ -303,7 +335,59 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       </div>
 
       {/* Terminal containers — all mounted, visibility toggled via display */}
-      <div ref={wrapperRef} className="flex-1 min-h-0 relative" />
+      <div ref={wrapperRef} className="flex-1 min-h-0 relative">
+        {showInputOverlay && (
+          <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-sky-200 font-medium">Input rapido</div>
+              <button
+                onClick={() => {
+                  setOverlayText("");
+                  setShowInputOverlay(false);
+                }}
+                className="p-1.5 rounded ide-icon-button-danger transition-colors"
+                title="Cerrar input"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <textarea
+              ref={overlayTextareaRef}
+              value={overlayText}
+              onChange={(e) => setOverlayText(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  submitOverlayText();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setOverlayText("");
+                  setShowInputOverlay(false);
+                }
+              }}
+              className="flex-1 w-full resize-none rounded-lg border ide-border ide-panel px-3 py-2 text-sm font-mono ide-text focus:outline-none"
+              placeholder="Escribe o pega aqui. Cmd/Ctrl+Enter para enviar."
+            />
+
+            <div className="flex justify-end">
+              <button
+                onClick={submitOverlayText}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-sky-600 hover:bg-sky-500 text-white transition-colors"
+                title="Enviar al terminal"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m0 0l-4-4m4 4l-4 4" />
+                </svg>
+                Enter
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 });
