@@ -109,9 +109,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
           }
           if (msg.type === "sessions_sync") {
             if (Array.isArray(msg.sessions)) {
-              reconcileRemoteSessionsRef.current?.(
-                msg.sessions.filter(isRemoteSessionInfo).map((item) => ({ id: item.id, name: item.name }))
-              );
+              const remoteSessions = (msg.sessions as unknown[]).filter(isRemoteSessionInfo);
+              reconcileRemoteSessionsRef.current?.(remoteSessions);
             }
             return;
           }
