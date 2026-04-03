@@ -42,8 +42,38 @@ function broadcast(session: TerminalSession, payload: unknown): void {
 function removeSession(session: TerminalSession): void {
   const userSessions = sessionsByToken.get(session.token);
   userSessions?.delete(session.id);
+  broadcastSessionsForToken(session.token);
   if (userSessions && userSessions.size === 0) {
     sessionsByToken.delete(session.token);
+  }
+}
+
+function listSessionsForToken(token: string): Array<{ id: string; name: string }> {
+  const sessions = sessionsByToken.get(token);
+  if (!sessions) return [];
+  return Array.from(sessions.values()).map((session) => ({
+    id: session.id,
+    name: session.name,
+  }));
+}
+
+function broadcastSessionsForToken(token: string): void {
+  const userSessions = sessionsByToken.get(token);
+  if (!userSessions) return;
+
+  const uniqueClients = new Set<WebSocket>();
+  for (const session of userSessions.values()) {
+    for (const client of session.clients) {
+      uniqueClients.add(client);
+    }
+  }
+
+  const payload = {
+    type: "sessions_sync",
+    sessions: listSessionsForToken(token),
+  };
+  for (const client of uniqueClients) {
+    sendJson(client, payload);
   }
 }
 
@@ -87,6 +117,7 @@ function createSession(token: string, name?: string): TerminalSession {
   });
 
   getUserSessions(token).set(session.id, session);
+  broadcastSessionsForToken(token);
   return session;
 }
 
@@ -109,12 +140,7 @@ function destroySession(session: TerminalSession): void {
 }
 
 export function listTerminalSessions(token: string): Array<{ id: string; name: string }> {
-  const sessions = sessionsByToken.get(token);
-  if (!sessions) return [];
-  return Array.from(sessions.values()).map((session) => ({
-    id: session.id,
-    name: session.name,
-  }));
+  return listSessionsForToken(token);
 }
 
 export function closeTerminalSession(token: string, sessionId: string): boolean {
@@ -135,6 +161,7 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
 
   if (name && session.name !== name) {
     session.name = name;
+    broadcastSessionsForToken(token);
   }
 
   session.clients.add(ws);
@@ -143,6 +170,10 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
     sessionId: session.id,
     name: session.name,
     reconnected,
+  });
+  sendJson(ws, {
+    type: "sessions_sync",
+    sessions: listSessionsForToken(token),
   });
 
   ws.on("message", (raw: RawData) => {
@@ -166,6 +197,15 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
       }
       if (msg.type === "close_session") {
         destroySession(session);
+        return;
+      }
+      if (msg.type === "rename_session") {
+        const nextName = String(msg.name || "").trim();
+        if (nextName) {
+          session.name = nextName;
+          broadcastSessionsForToken(token);
+        }
+        return;
       }
     } catch {
       session.ptyProcess.write(rawText);
