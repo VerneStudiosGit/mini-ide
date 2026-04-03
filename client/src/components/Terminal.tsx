@@ -30,6 +30,12 @@ interface RemoteSessionInfo {
   name: string;
 }
 
+function isRemoteSessionInfo(item: unknown): item is RemoteSessionInfo {
+  if (typeof item !== "object" || item === null) return false;
+  const maybe = item as { id?: unknown; name?: unknown };
+  return typeof maybe.id === "string" && typeof maybe.name === "string";
+}
+
 const TERM_THEME = {
   background: "#0a0a0b",
   foreground: "#f5f5f5",
@@ -104,9 +110,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
           if (msg.type === "sessions_sync") {
             if (Array.isArray(msg.sessions)) {
               reconcileRemoteSessionsRef.current?.(
-                msg.sessions
-                  .filter((item) => item && typeof item.id === "string" && typeof item.name === "string")
-                  .map((item) => ({ id: item.id, name: item.name }))
+                msg.sessions.filter(isRemoteSessionInfo).map((item) => ({ id: item.id, name: item.name }))
               );
             }
             return;
