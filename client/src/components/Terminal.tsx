@@ -24,6 +24,7 @@ interface TermSession {
   reconnectTimer: number | null;
   shouldReconnect: boolean;
   closedLocally: boolean;
+  deferredTeardown: boolean;
 }
 
 interface RemoteSessionInfo {
@@ -116,15 +117,17 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
             if (typeof msg.sessionId === "string") session.serverSessionId = msg.sessionId;
             if (typeof msg.name === "string") session.name = msg.name;
             updateSessionState();
-            // The user already clicked X before the server assigned us
+            // The user already hit close before the server assigned us
             // an id. Kill the orphan pty now so it doesn't show up in
-            // the next sessions_sync and get recreated.
+            // the next sessions_sync and get recreated, and finish the
+            // local teardown that closeSession deferred.
             if (session.closedLocally && typeof msg.sessionId === "string") {
               pendingClosedRef.current.add(msg.sessionId);
               try {
                 ws.send(JSON.stringify({ type: "close_session" }));
               } catch {}
               try { ws.close(); } catch {}
+              finalizeDeferredClose(session);
             }
             return;
           }
@@ -155,6 +158,15 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         session.ws = null;
         session.connected = false;
         updateSessionState();
+        // Connection died before session_meta arrived on a session the
+        // user already asked to close. Nothing to clean up on the server
+        // (the pty never finished spawning, or we'll see it as orphan in
+        // the next sync and pendingClosedRef will ignore it once we know
+        // its id). Just finish the deferred local teardown.
+        if (session.closedLocally && session.deferredTeardown) {
+          finalizeDeferredClose(session);
+          return;
+        }
         if (!session.shouldReconnect) return;
         if (session.reconnectTimer != null) return;
         session.term.write("\r\n\x1b[93m[Conexion perdida. Reconectando...]\x1b[0m\r\n");
@@ -230,6 +242,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         reconnectTimer: null,
         shouldReconnect: true,
         closedLocally: false,
+        deferredTeardown: false,
       };
 
       const textEncoder = new TextEncoder();
@@ -344,6 +357,14 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     reconcileRemoteSessionsRef.current = reconcileRemoteSessions;
   }, [reconcileRemoteSessions]);
 
+  const finalizeDeferredClose = useCallback((session: TermSession) => {
+    if (!session.deferredTeardown) return;
+    session.deferredTeardown = false;
+    try { session.observer.disconnect(); } catch {}
+    try { session.term.dispose(); } catch {}
+    try { session.containerEl.remove(); } catch {}
+  }, []);
+
   const closeSession = useCallback(
     (id: number) => {
       const idx = sessionsRef.current.findIndex((s) => s.id === id);
@@ -359,6 +380,27 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       if (session.reconnectTimer != null) {
         window.clearTimeout(session.reconnectTimer);
         session.reconnectTimer = null;
+      }
+
+      // If the ws is still connecting we don't yet know the serverSessionId,
+      // so we can't tell the server to kill the pty and we can't add it to
+      // pendingClosedRef. Closing the ws now would abort the upgrade — the
+      // server would still spawn the pty and broadcast it to other tabs,
+      // which would then recreate the terminal. Defer the teardown: hide
+      // the UI, and let the session_meta handler (or onclose) finish the
+      // cleanup once we know the id.
+      const isConnecting = session.ws?.readyState === WebSocket.CONNECTING;
+      if (isConnecting) {
+        session.deferredTeardown = true;
+        session.containerEl.style.display = "none";
+        sessionsRef.current.splice(idx, 1);
+        updateSessionState();
+        setActiveId((current) => {
+          if (current !== id) return current;
+          const newIdx = Math.min(idx, sessionsRef.current.length - 1);
+          return sessionsRef.current[newIdx]?.id ?? null;
+        });
+        return;
       }
 
       if (session.ws?.readyState === WebSocket.OPEN) {
