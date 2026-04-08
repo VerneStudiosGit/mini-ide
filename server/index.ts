@@ -16,6 +16,11 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = createServer(app);
+// Disable Nagle on every incoming TCP socket so single-keystroke WS
+// frames go on the wire immediately (saves up to ~40ms per input).
+server.on("connection", (socket) => {
+  socket.setNoDelay(true);
+});
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));

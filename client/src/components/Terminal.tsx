@@ -220,9 +220,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         shouldReconnect: true,
       };
 
+      const textEncoder = new TextEncoder();
       term.onData((data) => {
         if (session.ws?.readyState === WebSocket.OPEN) {
-          session.ws.send(JSON.stringify({ type: "input", data }));
+          // Binary frame — server treats all binary WS messages as raw
+          // pty input. Avoids JSON stringify/parse on the hot keystroke
+          // path and keeps the frame as small as possible.
+          session.ws.send(textEncoder.encode(data));
         }
       });
 

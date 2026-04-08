@@ -220,7 +220,17 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
     });
   }
 
-  ws.on("message", (raw: RawData) => {
+  ws.on("message", (raw: RawData, isBinary: boolean) => {
+    // Hot path: binary frames are raw pty input. Skip JSON entirely.
+    if (isBinary) {
+      const buf = Buffer.isBuffer(raw)
+        ? raw
+        : Array.isArray(raw)
+        ? Buffer.concat(raw)
+        : Buffer.from(raw as ArrayBuffer);
+      session.ptyProcess.write(buf.toString("utf-8"));
+      return;
+    }
     const rawText =
       typeof raw === "string"
         ? raw
