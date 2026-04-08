@@ -218,9 +218,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       // activate effect will fit once the terminal becomes visible.
 
       const observer = new ResizeObserver(() => {
-        if (containerEl.style.display !== "none") {
-          fitAddon.fit();
-        }
+        // Skip when hidden or when an ancestor is display:none (clientWidth
+        // collapses to 0). Fitting at width 0 locks xterm to 1-2 cols and
+        // the narrow state sticks when the parent becomes visible again.
+        if (containerEl.style.display === "none") return;
+        if (containerEl.clientWidth === 0 || containerEl.clientHeight === 0) return;
+        fitAddon.fit();
       });
       observer.observe(containerEl);
 
