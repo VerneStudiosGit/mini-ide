@@ -9,7 +9,11 @@ interface TerminalSession {
   ptyProcess: pty.IPty;
   clients: Set<WebSocket>;
   closed: boolean;
+  scrollback: Buffer[];
+  scrollbackBytes: number;
 }
+
+const SCROLLBACK_LIMIT = 256 * 1024; // 256 KB per session
 
 interface SpawnTerminalOptions {
   token: string;
@@ -82,16 +86,22 @@ function createSession(token: string, name?: string): TerminalSession {
   const dataDir = process.env.DATA_DIR || "/";
   const id = randomUUID();
 
-  const ptyProcess = pty.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 24,
-    cwd: dataDir,
-    env: {
-      ...(process.env as Record<string, string>),
-      HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
-    },
-  });
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, [], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd: dataDir,
+      env: {
+        ...(process.env as Record<string, string>),
+        HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
+      },
+    });
+  } catch (err) {
+    console.error(`[terminal] pty.spawn failed (shell=${shell}, cwd=${dataDir}):`, err);
+    throw err;
+  }
 
   const session: TerminalSession = {
     id,
@@ -100,10 +110,25 @@ function createSession(token: string, name?: string): TerminalSession {
     ptyProcess,
     clients: new Set(),
     closed: false,
+    scrollback: [],
+    scrollbackBytes: 0,
   };
 
   ptyProcess.onData((data: string) => {
-    broadcast(session, { type: "output", data });
+    const buf = Buffer.from(data, "utf-8");
+    // Keep a rolling scrollback so reconnects/attaches can replay
+    // the last ~256KB of output (shell prompt, in-progress TUI frame, etc.).
+    session.scrollback.push(buf);
+    session.scrollbackBytes += buf.length;
+    while (session.scrollbackBytes > SCROLLBACK_LIMIT && session.scrollback.length > 1) {
+      const dropped = session.scrollback.shift()!;
+      session.scrollbackBytes -= dropped.length;
+    }
+    for (const client of session.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(buf, { binary: true, compress: false });
+      }
+    }
   });
 
   ptyProcess.onExit(({ exitCode, signal }) => {
@@ -117,7 +142,6 @@ function createSession(token: string, name?: string): TerminalSession {
   });
 
   getUserSessions(token).set(session.id, session);
-  broadcastSessionsForToken(token);
   return session;
 }
 
@@ -171,12 +195,42 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
     name: session.name,
     reconnected,
   });
-  sendJson(ws, {
-    type: "sessions_sync",
-    sessions: listSessionsForToken(token),
-  });
+  // Replay scrollback so a newly-attached client doesn't see a black
+  // screen when reconnecting to an existing pty. Strip terminal queries
+  // (Device Attributes, Device Status Report) so xterm.js doesn't
+  // re-answer them on replay — those answers would land in the shell
+  // as stray input like "1;2c".
+  if (session.scrollback.length > 0 && ws.readyState === WebSocket.OPEN) {
+    const replay = Buffer.concat(session.scrollback, session.scrollbackBytes)
+      .toString("utf-8")
+      // CSI ... c  → Device Attributes query (primary/secondary/tertiary)
+      .replace(/\x1b\[[\?>=]?[0-9;]*c/g, "")
+      // CSI ... n  → Device Status Report query
+      .replace(/\x1b\[[0-9;]*n/g, "");
+    ws.send(Buffer.from(replay, "utf-8"), { binary: true, compress: false });
+  }
+  // Broadcast AFTER session_meta so the new client has assigned its
+  // serverSessionId before any other client's reconcile runs.
+  if (!existingSession) {
+    broadcastSessionsForToken(token);
+  } else {
+    sendJson(ws, {
+      type: "sessions_sync",
+      sessions: listSessionsForToken(token),
+    });
+  }
 
-  ws.on("message", (raw: RawData) => {
+  ws.on("message", (raw: RawData, isBinary: boolean) => {
+    // Hot path: binary frames are raw pty input. Skip JSON entirely.
+    if (isBinary) {
+      const buf = Buffer.isBuffer(raw)
+        ? raw
+        : Array.isArray(raw)
+        ? Buffer.concat(raw)
+        : Buffer.from(raw as ArrayBuffer);
+      session.ptyProcess.write(buf.toString("utf-8"));
+      return;
+    }
     const rawText =
       typeof raw === "string"
         ? raw
@@ -212,11 +266,9 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
     }
   });
 
-  ws.on("close", () => {
+  const dropClient = () => {
     session.clients.delete(ws);
-  });
-
-  ws.on("error", () => {
-    session.clients.delete(ws);
-  });
+  };
+  ws.on("close", dropClient);
+  ws.on("error", dropClient);
 }

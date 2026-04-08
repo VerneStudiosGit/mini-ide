@@ -23,6 +23,8 @@ interface TermSession {
   observer: ResizeObserver;
   reconnectTimer: number | null;
   shouldReconnect: boolean;
+  closedLocally: boolean;
+  deferredTeardown: boolean;
 }
 
 interface RemoteSessionInfo {
@@ -64,13 +66,21 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   const [overlayText, setOverlayText] = useState("");
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const createSessionRef = useRef<
     ((name?: string, options?: { serverSessionId?: string | null; activate?: boolean }) => TermSession) | null
   >(null);
   const reconcileRemoteSessionsRef = useRef<((remoteSessions: RemoteSessionInfo[]) => void) | null>(null);
+  // serverSessionIds the user closed locally but whose close hasn't been
+  // acknowledged by the server yet. Skip reconcile-recreating them.
+  const pendingClosedRef = useRef<Set<string>>(new Set());
 
   const updateSessionState = useCallback(() => {
-    setSessions(sessionsRef.current.map((s) => ({ id: s.id, name: s.name, connected: s.connected })));
+    setSessions(
+      sessionsRef.current
+        .filter((s) => !s.closedLocally)
+        .map((s) => ({ id: s.id, name: s.name, connected: s.connected }))
+    );
   }, []);
 
   const connectSession = useCallback(
@@ -97,14 +107,32 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         ws.send(JSON.stringify({ type: "resize", cols: session.term.cols, rows: session.term.rows }));
       };
 
+      ws.binaryType = "arraybuffer";
       ws.onmessage = (e) => {
-        if (typeof e.data !== "string") return;
+        if (typeof e.data !== "string") {
+          // Binary frame = raw pty output (hot path, no JSON)
+          const data = e.data instanceof ArrayBuffer ? e.data : null;
+          if (data) session.term.write(new Uint8Array(data));
+          return;
+        }
         try {
           const msg = JSON.parse(e.data);
           if (msg.type === "session_meta") {
             if (typeof msg.sessionId === "string") session.serverSessionId = msg.sessionId;
             if (typeof msg.name === "string") session.name = msg.name;
             updateSessionState();
+            // The user already hit close before the server assigned us
+            // an id. Kill the orphan pty now so it doesn't show up in
+            // the next sessions_sync and get recreated, and finish the
+            // local teardown that closeSession deferred.
+            if (session.closedLocally && typeof msg.sessionId === "string") {
+              pendingClosedRef.current.add(msg.sessionId);
+              try {
+                ws.send(JSON.stringify({ type: "close_session" }));
+              } catch {}
+              try { ws.close(); } catch {}
+              finalizeDeferredClose(session);
+            }
             return;
           }
           if (msg.type === "sessions_sync") {
@@ -134,6 +162,15 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         session.ws = null;
         session.connected = false;
         updateSessionState();
+        // Connection died before session_meta arrived on a session the
+        // user already asked to close. Nothing to clean up on the server
+        // (the pty never finished spawning, or we'll see it as orphan in
+        // the next sync and pendingClosedRef will ignore it once we know
+        // its id). Just finish the deferred local teardown.
+        if (session.closedLocally && session.deferredTeardown) {
+          finalizeDeferredClose(session);
+          return;
+        }
         if (!session.shouldReconnect) return;
         if (session.reconnectTimer != null) return;
         session.term.write("\r\n\x1b[93m[Conexion perdida. Reconectando...]\x1b[0m\r\n");
@@ -177,19 +214,32 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       }
 
       term.open(containerEl);
-      fitAddon.fit();
+      // Don't fit yet — containerEl is display:none so width is 0. The
+      // activate effect will fit once the terminal becomes visible.
 
       const observer = new ResizeObserver(() => {
-        if (containerEl.style.display !== "none") {
-          fitAddon.fit();
-        }
+        // Skip when hidden or when an ancestor is display:none (clientWidth
+        // collapses to 0). Fitting at width 0 locks xterm to 1-2 cols and
+        // the narrow state sticks when the parent becomes visible again.
+        if (containerEl.style.display === "none") return;
+        if (containerEl.clientWidth === 0 || containerEl.clientHeight === 0) return;
+        fitAddon.fit();
       });
       observer.observe(containerEl);
 
       const session: TermSession = {
         id,
         serverSessionId: options?.serverSessionId || null,
-        name: name || `Terminal ${id}`,
+        name: name || (() => {
+          const used = new Set<number>();
+          for (const s of sessionsRef.current) {
+            const m = /^Terminal (\d+)$/.exec(s.name);
+            if (m) used.add(Number(m[1]));
+          }
+          let n = 1;
+          while (used.has(n)) n++;
+          return `Terminal ${n}`;
+        })(),
         term,
         fitAddon,
         ws: null,
@@ -198,11 +248,17 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         observer,
         reconnectTimer: null,
         shouldReconnect: true,
+        closedLocally: false,
+        deferredTeardown: false,
       };
 
+      const textEncoder = new TextEncoder();
       term.onData((data) => {
         if (session.ws?.readyState === WebSocket.OPEN) {
-          session.ws.send(JSON.stringify({ type: "input", data }));
+          // Binary frame — server treats all binary WS messages as raw
+          // pty input. Avoids JSON stringify/parse on the hot keystroke
+          // path and keeps the frame as small as possible.
+          session.ws.send(textEncoder.encode(data));
         }
       });
 
@@ -247,8 +303,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       updateSessionState();
       setActiveId((current) => {
         if (current !== id) return current;
-        const newIdx = Math.min(idx, sessionsRef.current.length - 1);
-        return sessionsRef.current[newIdx]?.id ?? null;
+        const visible = sessionsRef.current.filter((s) => !s.closedLocally);
+        const fallbackIdx = Math.min(idx, visible.length - 1);
+        return visible[fallbackIdx]?.id ?? null;
       });
     },
     [updateSessionState]
@@ -264,8 +321,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       }
 
       const remoteIds = new Set<string>();
+      const hasPendingLocal = sessionsRef.current.some((s) => !s.serverSessionId);
       for (const remote of remoteSessions) {
         remoteIds.add(remote.id);
+        // Ignore remotes we're in the middle of closing locally — the
+        // server just hasn't finished processing the close yet.
+        if (pendingClosedRef.current.has(remote.id)) continue;
         const existing = localByRemoteId.get(remote.id);
         if (existing) {
           if (existing.name !== remote.name) {
@@ -274,6 +335,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
           }
           continue;
         }
+        // Skip creating a local if we already have a just-created local
+        // session waiting for its session_meta — it will claim this remote
+        // once its own ws receives the assignment. Prevents duplicate tabs
+        // on "add terminal".
+        if (hasPendingLocal) continue;
         createSessionRef.current?.(remote.name, { serverSessionId: remote.id, activate: false });
       }
 
@@ -286,6 +352,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       for (const staleId of staleLocalIds) {
         dropLocalSession(staleId);
       }
+      // Any pendingClosed ids that are no longer in the remote list have
+      // been confirmed closed — forget them.
+      for (const id of Array.from(pendingClosedRef.current)) {
+        if (!remoteIds.has(id)) pendingClosedRef.current.delete(id);
+      }
     },
     [dropLocalSession, updateSessionState]
   );
@@ -294,17 +365,58 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     reconcileRemoteSessionsRef.current = reconcileRemoteSessions;
   }, [reconcileRemoteSessions]);
 
+  const finalizeDeferredClose = useCallback((session: TermSession) => {
+    if (!session.deferredTeardown) return;
+    session.deferredTeardown = false;
+    try { session.observer.disconnect(); } catch {}
+    try { session.term.dispose(); } catch {}
+    try { session.containerEl.remove(); } catch {}
+    const idx = sessionsRef.current.findIndex((s) => s.id === session.id);
+    if (idx !== -1) sessionsRef.current.splice(idx, 1);
+  }, []);
+
   const closeSession = useCallback(
     (id: number) => {
       const idx = sessionsRef.current.findIndex((s) => s.id === id);
       if (idx === -1) return;
-      if (sessionsRef.current.length <= 1) return;
+      const visibleCount = sessionsRef.current.filter((s) => !s.closedLocally).length;
+      if (visibleCount <= 1) return;
 
       const session = sessionsRef.current[idx];
+      session.closedLocally = true;
+      if (session.serverSessionId) {
+        pendingClosedRef.current.add(session.serverSessionId);
+      }
       session.shouldReconnect = false;
       if (session.reconnectTimer != null) {
         window.clearTimeout(session.reconnectTimer);
         session.reconnectTimer = null;
+      }
+
+      // If the ws is still connecting we don't yet know the serverSessionId,
+      // so we can't tell the server to kill the pty and we can't add it to
+      // pendingClosedRef. Closing the ws now would abort the upgrade — the
+      // server would still spawn the pty and broadcast it to other tabs,
+      // which would then recreate the terminal. Defer the teardown: hide
+      // the UI, and let the session_meta handler (or onclose) finish the
+      // cleanup once we know the id.
+      const isConnecting = session.ws?.readyState === WebSocket.CONNECTING;
+      if (isConnecting) {
+        // Keep the session in sessionsRef so reconcileRemoteSessions sees
+        // hasPendingLocal=true and other tabs don't recreate this terminal
+        // when the server broadcasts sessions_sync. It's hidden from the UI
+        // via updateSessionState's closedLocally filter. finalizeDeferredClose
+        // will splice it out once session_meta arrives (or the ws errors).
+        session.deferredTeardown = true;
+        session.containerEl.style.display = "none";
+        updateSessionState();
+        setActiveId((current) => {
+          if (current !== id) return current;
+          const visible = sessionsRef.current.filter((s) => !s.closedLocally);
+          const fallbackIdx = Math.min(idx, visible.length - 1);
+          return visible[fallbackIdx]?.id ?? null;
+        });
+        return;
       }
 
       if (session.ws?.readyState === WebSocket.OPEN) {
@@ -325,8 +437,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
 
       setActiveId((current) => {
         if (current !== id) return current;
-        const newIdx = Math.min(idx, sessionsRef.current.length - 1);
-        return sessionsRef.current[newIdx]?.id ?? null;
+        // Skip deferred-close "ghost" sessions still sitting in sessionsRef
+        // waiting for their session_meta — activating one would show an
+        // empty pane.
+        const visible = sessionsRef.current.filter((s) => !s.closedLocally);
+        const fallbackIdx = Math.min(idx, visible.length - 1);
+        return visible[fallbackIdx]?.id ?? null;
       });
     },
     [token, updateSessionState]
@@ -403,10 +519,33 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     for (const session of sessionsRef.current) {
       if (session.id === activeId) {
         session.containerEl.style.display = "block";
+        // Double-rAF + fallback timer: the container was display:none so its
+        // width is unknown until layout runs. Fit once the browser has laid
+        // out the flex children, then re-fit to catch late layout shifts.
+        const fitNow = () => {
+          if (session.containerEl.clientWidth > 0) {
+            try { session.fitAddon.fit(); } catch {}
+            // Force a redraw + SIGWINCH to the pty so reconnected sessions
+            // that haven't emitted output yet repaint their screen.
+            try { session.term.refresh(0, session.term.rows - 1); } catch {}
+            if (session.ws?.readyState === WebSocket.OPEN) {
+              session.ws.send(
+                JSON.stringify({
+                  type: "resize",
+                  cols: session.term.cols,
+                  rows: session.term.rows,
+                })
+              );
+            }
+          }
+        };
         requestAnimationFrame(() => {
-          session.fitAddon.fit();
-          session.term.focus();
+          requestAnimationFrame(() => {
+            fitNow();
+            session.term.focus();
+          });
         });
+        setTimeout(fitNow, 60);
       } else {
         session.containerEl.style.display = "none";
       }
@@ -459,6 +598,48 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     };
   }, [createSession, token]);
 
+  // Global shortcuts: Cmd/Ctrl+T → new terminal, Cmd/Ctrl+1..9 → switch tab
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.altKey) return;
+      // Cmd/Ctrl + P → new terminal
+      if (e.key === "p" || e.key === "P") {
+        e.preventDefault();
+        createSession();
+        return;
+      }
+      // Cmd/Ctrl + O → close active terminal
+      if (e.key === "o" || e.key === "O") {
+        e.preventDefault();
+        if (activeId != null) closeSession(activeId);
+        return;
+      }
+      // Cmd/Ctrl + I → rename active terminal
+      if (e.key === "i" || e.key === "I") {
+        e.preventDefault();
+        openRenameDialog();
+        return;
+      }
+      // Cmd/Ctrl + / → toggle shortcuts dialog
+      if (e.key === "/") {
+        e.preventDefault();
+        setShowShortcuts((v) => !v);
+        return;
+      }
+      if (/^[1-9]$/.test(e.key)) {
+        const idx = Number(e.key) - 1;
+        const target = sessionsRef.current[idx];
+        if (target) {
+          e.preventDefault();
+          setActiveId(target.id);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [createSession, closeSession, openRenameDialog, activeId]);
+
   return (
     <div className="h-full flex flex-col relative">
       <div className="flex items-center gap-1 px-2 py-1 bg-blue-900/60 border-b border-blue-800 shrink-0 overflow-x-auto">
@@ -507,6 +688,16 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487a2.1 2.1 0 113.03 2.913L9.15 18.146l-4.65 1.25 1.248-4.652L16.862 4.487z" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => setShowShortcuts(true)}
+          className="w-9 h-9 flex items-center justify-center rounded-md bg-blue-800/40 hover:bg-blue-700 text-blue-300 hover:text-white transition-colors shrink-0"
+          title="Ver atajos de teclado"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h.01M9 8h.01M13 8h.01M17 8h.01M5 12h.01M9 12h6M17 12h.01M6 16h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2z" />
           </svg>
         </button>
 
@@ -581,9 +772,23 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
               value={overlayText}
               onChange={(e) => setOverlayText(e.target.value)}
               onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.stopPropagation();
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   submitOverlayText();
+                  return;
+                }
+                if (e.key === "Enter" && e.shiftKey) {
+                  e.preventDefault();
+                  const el = e.currentTarget;
+                  const start = el.selectionStart;
+                  const end = el.selectionEnd;
+                  const next = overlayText.slice(0, start) + "\n" + overlayText.slice(end);
+                  setOverlayText(next);
+                  requestAnimationFrame(() => {
+                    el.selectionStart = el.selectionEnd = start + 1;
+                  });
+                  return;
                 }
                 if (e.key === "Escape") {
                   e.preventDefault();
@@ -592,7 +797,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
                 }
               }}
               className="flex-1 w-full resize-none rounded-lg border ide-border ide-panel px-3 py-2 text-sm font-mono ide-text focus:outline-none"
-              placeholder="Escribe o pega aqui. Cmd/Ctrl+Enter para enviar."
+              placeholder="Enter para enviar. Shift+Enter para salto de linea."
             />
 
             <div className="flex justify-end">
@@ -646,6 +851,48 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
                   Guardar
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {showShortcuts && (
+          <div
+            className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setShowShortcuts(false)}
+          >
+            <div
+              className="w-full max-w-sm rounded-xl border ide-border ide-panel shadow-2xl p-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-sm font-semibold ide-text">Atajos de teclado</div>
+                <button
+                  onClick={() => setShowShortcuts(false)}
+                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-blue-800/50 text-blue-300 hover:text-white"
+                  title="Cerrar"
+                >
+                  ×
+                </button>
+              </div>
+              <ul className="space-y-2 text-xs ide-text">
+                {[
+                  ["Nuevo terminal", "Cmd/Ctrl + P"],
+                  ["Cerrar terminal activo", "Cmd/Ctrl + O"],
+                  ["Renombrar terminal activo", "Cmd/Ctrl + I"],
+                  ["Cambiar a terminal N", "Cmd/Ctrl + 1..9"],
+                  ["Mostrar/ocultar atajos", "Cmd/Ctrl + /"],
+                  ["Enviar input rapido", "Enter"],
+                  ["Salto de linea en input rapido", "Shift + Enter"],
+                  ["Cerrar input rapido / dialogos", "Esc"],
+                ].map(([label, keys]) => (
+                  <li key={label} className="flex items-center justify-between gap-3">
+                    <span>{label}</span>
+                    <kbd className="px-2 py-0.5 rounded border ide-border ide-panel-soft font-mono text-[11px]">
+                      {keys}
+                    </kbd>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         )}

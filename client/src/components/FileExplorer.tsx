@@ -7,6 +7,8 @@ import { getFileType, formatSize } from "../utils/fileUtils";
 
 type ViewMode = "grid" | "tree";
 
+const DATA_DIR = import.meta.env.VITE_DATA_DIR || "/data";
+
 function FolderIcon() {
   return (
     <svg className="w-10 h-10 text-sky-400" fill="currentColor" viewBox="0 0 24 24">
@@ -108,7 +110,7 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
   }, [authFetch]);
 
   useEffect(() => {
-    loadDir("/data");
+    loadDir(DATA_DIR);
   }, [loadDir]);
 
   // Close "Nuevo" dropdown on outside click
@@ -518,7 +520,7 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
         /* Tree view */
         <FileTreeView
           token={token}
-          rootPath="/data"
+          rootPath={DATA_DIR}
           onOpenFile={(entry) => {
             const fileType = getFileType(entry.name);
             if (fileType === "text" && onOpenFile) {
