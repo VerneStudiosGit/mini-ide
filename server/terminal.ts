@@ -82,16 +82,22 @@ function createSession(token: string, name?: string): TerminalSession {
   const dataDir = process.env.DATA_DIR || "/";
   const id = randomUUID();
 
-  const ptyProcess = pty.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 24,
-    cwd: dataDir,
-    env: {
-      ...(process.env as Record<string, string>),
-      HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
-    },
-  });
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, [], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd: dataDir,
+      env: {
+        ...(process.env as Record<string, string>),
+        HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
+      },
+    });
+  } catch (err) {
+    console.error(`[terminal] pty.spawn failed (shell=${shell}, cwd=${dataDir}):`, err);
+    throw err;
+  }
 
   const session: TerminalSession = {
     id,
@@ -103,7 +109,12 @@ function createSession(token: string, name?: string): TerminalSession {
   };
 
   ptyProcess.onData((data: string) => {
-    broadcast(session, { type: "output", data });
+    const buf = Buffer.from(data, "utf-8");
+    for (const client of session.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(buf, { binary: true, compress: false });
+      }
+    }
   });
 
   ptyProcess.onExit(({ exitCode, signal }) => {
@@ -117,7 +128,6 @@ function createSession(token: string, name?: string): TerminalSession {
   });
 
   getUserSessions(token).set(session.id, session);
-  broadcastSessionsForToken(token);
   return session;
 }
 
@@ -171,10 +181,16 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
     name: session.name,
     reconnected,
   });
-  sendJson(ws, {
-    type: "sessions_sync",
-    sessions: listSessionsForToken(token),
-  });
+  // Broadcast AFTER session_meta so the new client has assigned its
+  // serverSessionId before any other client's reconcile runs.
+  if (!existingSession) {
+    broadcastSessionsForToken(token);
+  } else {
+    sendJson(ws, {
+      type: "sessions_sync",
+      sessions: listSessionsForToken(token),
+    });
+  }
 
   ws.on("message", (raw: RawData) => {
     const rawText =

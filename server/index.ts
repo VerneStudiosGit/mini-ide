@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
@@ -74,7 +75,11 @@ app.get("*", (_req, res) => {
 });
 
 // WebSocket server for terminal — check token from query param
-const wss = new WebSocketServer({ server, path: "/ws/terminal" });
+const wss = new WebSocketServer({
+  server,
+  path: "/ws/terminal",
+  perMessageDeflate: false,
+});
 
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
@@ -85,11 +90,18 @@ wss.on("connection", (ws, req) => {
     return;
   }
 
-  spawnTerminal(ws, {
-    token,
-    sessionId: url.searchParams.get("sessionId") || undefined,
-    name: url.searchParams.get("name") || undefined,
-  });
+  try {
+    spawnTerminal(ws, {
+      token,
+      sessionId: url.searchParams.get("sessionId") || undefined,
+      name: url.searchParams.get("name") || undefined,
+    });
+  } catch (err) {
+    console.error("[ws] spawnTerminal failed:", err);
+    try {
+      ws.close(1011, "terminal spawn failed");
+    } catch {}
+  }
 });
 
 server.on("upgrade", (req, socket, head) => {

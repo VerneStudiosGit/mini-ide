@@ -97,8 +97,14 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         ws.send(JSON.stringify({ type: "resize", cols: session.term.cols, rows: session.term.rows }));
       };
 
+      ws.binaryType = "arraybuffer";
       ws.onmessage = (e) => {
-        if (typeof e.data !== "string") return;
+        if (typeof e.data !== "string") {
+          // Binary frame = raw pty output (hot path, no JSON)
+          const data = e.data instanceof ArrayBuffer ? e.data : null;
+          if (data) session.term.write(new Uint8Array(data));
+          return;
+        }
         try {
           const msg = JSON.parse(e.data);
           if (msg.type === "session_meta") {
@@ -189,7 +195,16 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       const session: TermSession = {
         id,
         serverSessionId: options?.serverSessionId || null,
-        name: name || `Terminal ${id}`,
+        name: name || (() => {
+          const used = new Set<number>();
+          for (const s of sessionsRef.current) {
+            const m = /^Terminal (\d+)$/.exec(s.name);
+            if (m) used.add(Number(m[1]));
+          }
+          let n = 1;
+          while (used.has(n)) n++;
+          return `Terminal ${n}`;
+        })(),
         term,
         fitAddon,
         ws: null,
@@ -264,6 +279,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       }
 
       const remoteIds = new Set<string>();
+      const hasPendingLocal = sessionsRef.current.some((s) => !s.serverSessionId);
       for (const remote of remoteSessions) {
         remoteIds.add(remote.id);
         const existing = localByRemoteId.get(remote.id);
@@ -274,6 +290,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
           }
           continue;
         }
+        // Skip creating a local if we already have a just-created local
+        // session waiting for its session_meta — it will claim this remote
+        // once its own ws receives the assignment. Prevents duplicate tabs
+        // on "add terminal".
+        if (hasPendingLocal) continue;
         createSessionRef.current?.(remote.name, { serverSessionId: remote.id, activate: false });
       }
 
