@@ -15,6 +15,12 @@ type MobileTab = "files" | "terminal" | "theme" | "editor";
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("auth_token") || "");
   const [dividerX, setDividerX] = useState(50);
+  const [filesCollapsed, setFilesCollapsed] = useState<boolean>(
+    () => localStorage.getItem("ide_files_collapsed") === "1"
+  );
+  useEffect(() => {
+    localStorage.setItem("ide_files_collapsed", filesCollapsed ? "1" : "0");
+  }, [filesCollapsed]);
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < 768 : false
@@ -180,19 +186,44 @@ export default function App() {
       </div>
 
       <div
-        className={`${mobileTab === "files" ? "flex" : "hidden"} md:flex h-full overflow-hidden flex-col ide-panel`}
-        style={!isMobile ? { width: `${dividerX}%` } : undefined}
+        className={`${mobileTab === "files" ? "flex" : "hidden"} ${
+          filesCollapsed ? "md:hidden" : "md:flex"
+        } h-full overflow-hidden flex-col ide-panel`}
+        style={!isMobile && !filesCollapsed ? { width: `${dividerX}%` } : undefined}
       >
         <FileExplorer token={token} onOpenFile={handleOpenFile} />
       </div>
 
-      <div className="hidden md:block w-1.5 cursor-col-resize ide-divider shrink-0" onMouseDown={handleDragStart} />
+      {!filesCollapsed && (
+        <div
+          className="hidden md:block w-1.5 cursor-col-resize ide-divider shrink-0"
+          onMouseDown={handleDragStart}
+        />
+      )}
 
       <div
         className={`${mobileTab === "files" ? "hidden" : "flex"} md:flex h-full overflow-hidden flex-col ide-panel`}
-        style={!isMobile ? { width: `${100 - dividerX}%` } : undefined}
+        style={
+          !isMobile
+            ? { width: filesCollapsed ? "100%" : `${100 - dividerX}%` }
+            : undefined
+        }
       >
         <div className="hidden md:flex px-4 py-2 border-b ide-border ide-panel-soft items-center gap-2">
+          <button
+            onClick={() => setFilesCollapsed((v) => !v)}
+            title={filesCollapsed ? "Mostrar archivos" : "Ocultar archivos"}
+            aria-label={filesCollapsed ? "Mostrar archivos" : "Ocultar archivos"}
+            className="p-1 rounded ide-tab transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              {filesCollapsed ? (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h10" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7M19 19l-7-7 7-7" />
+              )}
+            </svg>
+          </button>
           <div className="flex items-center gap-1">
             {openFile && (
               <button
