@@ -48,6 +48,7 @@ persist_home_path() {
 persist_home_path ".claude"      dir
 persist_home_path ".claude.json" file
 persist_home_path ".codex"       dir
+persist_home_path ".aws"         dir
 
 # Auto-login to GitHub CLI if GITHUB_TOKEN is set
 if [ -n "$GITHUB_TOKEN" ]; then

@@ -2,8 +2,21 @@ FROM node:20-bookworm
 
 # Build tools for node-pty + basic utilities
 RUN apt-get update && apt-get install -y \
-    build-essential python3 git curl wget vim nano sudo gosu \
+    build-essential python3 git curl wget vim nano sudo gosu unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI v2 (arch-aware)
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) awsurl="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" ;; \
+      arm64) awsurl="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" ;; \
+      *) echo "unsupported arch $arch" && exit 1 ;; \
+    esac; \
+    curl -fsSL "$awsurl" -o /tmp/awscliv2.zip; \
+    unzip -q /tmp/awscliv2.zip -d /tmp; \
+    /tmp/aws/install; \
+    rm -rf /tmp/aws /tmp/awscliv2.zip
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
