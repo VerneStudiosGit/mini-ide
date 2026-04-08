@@ -268,15 +268,7 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
 
   const dropClient = () => {
     session.clients.delete(ws);
-    // If a brand-new session lost its only client before anyone else
-    // attached (user clicked "X" before the ws even opened), tear the
-    // orphan pty down so it doesn't stick around and reappear in the
-    // next sessions_sync.
-    if (!existingSession && session.clients.size === 0 && !session.closed) {
-      destroySession(session);
-    }
   };
-
   ws.on("close", dropClient);
   ws.on("error", dropClient);
 }
