@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 
 export interface TerminalProps {
   token: string;
+  voiceNoteEnabled?: boolean;
 }
 
 export interface TerminalHandle {
@@ -55,10 +56,13 @@ const TERM_THEME = {
 
 let nextId = 1;
 
-export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ token }, ref) {
+export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ token, voiceNoteEnabled = false }, ref) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const overlayTextareaRef = useRef<HTMLTextAreaElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
   const sessionsRef = useRef<TermSession[]>([]);
   const [sessions, setSessions] = useState<{ id: number; name: string; connected: boolean }[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
@@ -67,6 +71,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const createSessionRef = useRef<
     ((name?: string, options?: { serverSessionId?: string | null; activate?: boolean }) => TermSession) | null
   >(null);
@@ -464,6 +470,138 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     },
   }));
 
+  const stopMediaStream = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  }, []);
+
+  const blobToBase64 = useCallback(
+    (blob: Blob) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = typeof reader.result === "string" ? reader.result : "";
+          const [, base64 = ""] = result.split(",");
+          if (base64) {
+            resolve(base64);
+            return;
+          }
+          reject(new Error("No se pudo leer la nota de voz."));
+        };
+        reader.onerror = () => reject(new Error("No se pudo leer la nota de voz."));
+        reader.readAsDataURL(blob);
+      }),
+    []
+  );
+
+  const transcribeBlob = useCallback(
+    async (blob: Blob) => {
+      const audioBase64 = await blobToBase64(blob);
+      const extension = blob.type.includes("ogg")
+        ? "ogg"
+        : blob.type.includes("wav")
+        ? "wav"
+        : "webm";
+      const res = await fetch("/api/preferences/voice-note/transcribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType: blob.type || "audio/webm",
+          fileName: `voice-note.${extension}`,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "No se pudo transcribir la nota de voz.");
+      }
+
+      const text = typeof data.text === "string" ? data.text : "";
+      if (!text.trim()) {
+        throw new Error("La transcripcion llego vacia.");
+      }
+
+      sendToActive(text);
+    },
+    [blobToBase64, sendToActive, token]
+  );
+
+  const stopVoiceRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+    recorder.stop();
+  }, []);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (voiceState !== "idle") return;
+    if (!("MediaRecorder" in window) || !navigator.mediaDevices?.getUserMedia) {
+      setVoiceError("Tu navegador no soporta grabacion de audio.");
+      return;
+    }
+
+    try {
+      setVoiceError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      voiceChunksRef.current = [];
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          voiceChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = () => {
+        setVoiceError("La grabacion fallo.");
+        setVoiceState("idle");
+        stopMediaStream();
+      };
+
+      recorder.onstop = async () => {
+        const chunks = [...voiceChunksRef.current];
+        voiceChunksRef.current = [];
+        stopMediaStream();
+
+        if (chunks.length === 0) {
+          setVoiceState("idle");
+          return;
+        }
+
+        try {
+          setVoiceState("transcribing");
+          const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+          await transcribeBlob(blob);
+          setVoiceState("idle");
+        } catch (err) {
+          setVoiceError(err instanceof Error ? err.message : "No se pudo transcribir la nota de voz.");
+          setVoiceState("idle");
+        }
+      };
+
+      recorder.start();
+      setVoiceState("recording");
+    } catch (err) {
+      stopMediaStream();
+      setVoiceState("idle");
+      setVoiceError(
+        err instanceof Error ? err.message : "No pudimos acceder al microfono."
+      );
+    }
+  }, [stopMediaStream, transcribeBlob, voiceState]);
+
   useEffect(() => {
     if (!showInputOverlay) return;
     requestAnimationFrame(() => {
@@ -553,6 +691,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, [activeId]);
 
   useEffect(() => {
+    if (voiceNoteEnabled) return;
+    if (voiceState === "recording") stopVoiceRecording();
+    setVoiceState("idle");
+  }, [stopVoiceRecording, voiceNoteEnabled, voiceState]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const boot = async () => {
@@ -595,8 +739,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         session.containerEl.remove();
       }
       sessionsRef.current = [];
+      stopMediaStream();
     };
-  }, [createSession, token]);
+  }, [createSession, stopMediaStream, token]);
 
   // Global shortcuts: Cmd/Ctrl+T → new terminal, Cmd/Ctrl+1..9 → switch tab
   useEffect(() => {
@@ -749,6 +894,54 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       </div>
 
       <div ref={wrapperRef} className="flex-1 min-h-0 relative">
+        {voiceNoteEnabled && (
+          <div className="absolute right-4 bottom-4 z-40 flex flex-col items-end gap-2">
+            {voiceError && (
+              <div className="max-w-xs rounded-lg border border-red-500/40 bg-black/85 px-3 py-2 text-xs text-red-200 shadow-lg">
+                {voiceError}
+              </div>
+            )}
+
+            {voiceState !== "idle" && (
+              <div className="rounded-full border border-white/10 bg-black/85 px-3 py-1.5 text-xs text-white shadow-lg">
+                {voiceState === "recording" ? "Grabando... toca para terminar" : "Transcribiendo..."}
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                setVoiceError(null);
+                if (voiceState === "recording") {
+                  stopVoiceRecording();
+                  return;
+                }
+                if (voiceState === "idle") {
+                  startVoiceRecording();
+                }
+              }}
+              disabled={voiceState === "transcribing"}
+              className={`h-14 w-14 rounded-full shadow-2xl flex items-center justify-center text-white transition-all ${
+                voiceState === "recording"
+                  ? "bg-red-500 hover:bg-red-400 scale-105"
+                  : "bg-emerald-600 hover:bg-emerald-500"
+              } disabled:cursor-not-allowed disabled:opacity-70`}
+              title={voiceState === "recording" ? "Detener grabacion" : "Grabar nota de voz"}
+            >
+              {voiceState === "transcribing" ? (
+                <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v4m0 8v4m8-8h-4M8 12H4m13.657-5.657l-2.828 2.828M9.17 14.83l-2.827 2.827m0-11.314 2.827 2.828m8.486 8.486-2.828-2.827" />
+                </svg>
+              ) : voiceState === "recording" ? (
+                <span className="block h-4 w-4 rounded bg-white" />
+              ) : (
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a4.75 4.75 0 004.75-4.75V8a4.75 4.75 0 10-9.5 0v6A4.75 4.75 0 0012 18.75zm0 0v2.75m-4 0h8" />
+                </svg>
+              )}
+            </button>
+          </div>
+        )}
+
         {showInputOverlay && (
           <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm p-3 flex flex-col gap-2">
             <div className="flex items-center justify-between">

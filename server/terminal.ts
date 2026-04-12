@@ -1,12 +1,28 @@
 import { randomUUID } from "crypto";
+import { spawn } from "child_process";
 import { RawData, WebSocket } from "ws";
 import * as pty from "node-pty";
+import { getDataDir } from "./dataDir";
+
+interface ShellExitInfo {
+  exitCode: number | null;
+  signal: number | null;
+}
+
+interface ShellProcess {
+  mode: "pty" | "fallback";
+  write: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  kill: () => void;
+  onData: (callback: (data: string) => void) => void;
+  onExit: (callback: (info: ShellExitInfo) => void) => void;
+}
 
 interface TerminalSession {
   id: string;
   name: string;
   token: string;
-  ptyProcess: pty.IPty;
+  shellProcess: ShellProcess;
   clients: Set<WebSocket>;
   closed: boolean;
   scrollback: Buffer[];
@@ -14,6 +30,11 @@ interface TerminalSession {
 }
 
 const SCROLLBACK_LIMIT = 256 * 1024; // 256 KB per session
+const IS_RAILWAY =
+  Boolean(process.env.RAILWAY_ENVIRONMENT_NAME) ||
+  Boolean(process.env.RAILWAY_SERVICE_NAME);
+const ALLOW_TERMINAL_FALLBACK =
+  process.env.TERMINAL_FALLBACK_MODE === "1" || !IS_RAILWAY;
 
 interface SpawnTerminalOptions {
   token: string;
@@ -81,40 +102,119 @@ function broadcastSessionsForToken(token: string): void {
   }
 }
 
+function createPtyProcess(shell: string, dataDir: string): ShellProcess {
+  const ptyProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
+    cwd: dataDir,
+    env: {
+      ...(process.env as Record<string, string>),
+      HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
+    },
+  });
+
+  return {
+    mode: "pty",
+    write: (data) => ptyProcess.write(data),
+    resize: (cols, rows) => ptyProcess.resize(cols, rows),
+    kill: () => ptyProcess.kill(),
+    onData: (callback) => ptyProcess.onData(callback),
+    onExit: (callback) =>
+      ptyProcess.onExit(({ exitCode, signal }) => {
+        callback({ exitCode, signal: signal ?? null });
+      }),
+  };
+}
+
+function createFallbackProcess(shell: string, dataDir: string): ShellProcess {
+  const child = spawn(shell, [], {
+    cwd: dataDir,
+    env: {
+      ...(process.env as Record<string, string>),
+      TERM: "xterm-256color",
+      HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
+    },
+    stdio: "pipe",
+  });
+
+  const dataListeners = new Set<(data: string) => void>();
+  const exitListeners = new Set<(info: ShellExitInfo) => void>();
+
+  child.stdout?.on("data", (chunk: Buffer | string) => {
+    const data = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+    for (const listener of dataListeners) listener(data);
+  });
+  child.stderr?.on("data", (chunk: Buffer | string) => {
+    const data = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+    for (const listener of dataListeners) listener(data);
+  });
+  child.on("close", (exitCode, signal) => {
+    const numericSignal = typeof signal === "string" ? null : signal;
+    for (const listener of exitListeners) listener({ exitCode, signal: numericSignal });
+  });
+
+  return {
+    mode: "fallback",
+    write: (data) => {
+      child.stdin?.write(data);
+    },
+    resize: () => {
+      // No-op: stdio pipes don't expose terminal resizing.
+    },
+    kill: () => {
+      child.kill();
+    },
+    onData: (callback) => {
+      dataListeners.add(callback);
+    },
+    onExit: (callback) => {
+      exitListeners.add(callback);
+    },
+  };
+}
+
+function createShellProcess(shell: string, dataDir: string): ShellProcess {
+  try {
+    return createPtyProcess(shell, dataDir);
+  } catch (err) {
+    if (!ALLOW_TERMINAL_FALLBACK) {
+      console.error(`[terminal] pty.spawn failed (shell=${shell}, cwd=${dataDir}):`, err);
+      throw err;
+    }
+    console.warn(`[terminal] node-pty unavailable, falling back to child_process (shell=${shell}, cwd=${dataDir})`);
+    return createFallbackProcess(shell, dataDir);
+  }
+}
+
 function createSession(token: string, name?: string): TerminalSession {
   const shell = process.env.SHELL || "/bin/bash";
-  const dataDir = process.env.DATA_DIR || "/";
+  const dataDir = getDataDir();
   const id = randomUUID();
 
-  let ptyProcess;
-  try {
-    ptyProcess = pty.spawn(shell, [], {
-      name: "xterm-256color",
-      cols: 80,
-      rows: 24,
-      cwd: dataDir,
-      env: {
-        ...(process.env as Record<string, string>),
-        HOME: process.env.HOME || `/home/${process.env.USER || "mini-ide"}`,
-      },
-    });
-  } catch (err) {
-    console.error(`[terminal] pty.spawn failed (shell=${shell}, cwd=${dataDir}):`, err);
-    throw err;
-  }
+  const shellProcess = createShellProcess(shell, dataDir);
 
   const session: TerminalSession = {
     id,
     name: name || `Terminal ${id.slice(0, 6)}`,
     token,
-    ptyProcess,
+    shellProcess,
     clients: new Set(),
     closed: false,
     scrollback: [],
     scrollbackBytes: 0,
   };
 
-  ptyProcess.onData((data: string) => {
+  if (shellProcess.mode === "fallback" && session.scrollback.length === 0) {
+    const banner = Buffer.from(
+      `[Terminal fallback mode]\r\nPTY no disponible en este entorno. Ejecutando shell por pipes.\r\nCWD: ${dataDir}\r\n\r\n`,
+      "utf-8"
+    );
+    session.scrollback.push(banner);
+    session.scrollbackBytes += banner.length;
+  }
+
+  shellProcess.onData((data: string) => {
     const buf = Buffer.from(data, "utf-8");
     // Keep a rolling scrollback so reconnects/attaches can replay
     // the last ~256KB of output (shell prompt, in-progress TUI frame, etc.).
@@ -131,7 +231,7 @@ function createSession(token: string, name?: string): TerminalSession {
     }
   });
 
-  ptyProcess.onExit(({ exitCode, signal }) => {
+  shellProcess.onExit(({ exitCode, signal }) => {
     session.closed = true;
     broadcast(session, { type: "session_closed", exitCode, signal });
     for (const client of session.clients) {
@@ -149,7 +249,7 @@ function destroySession(session: TerminalSession): void {
   if (session.closed) return;
   session.closed = true;
   try {
-    session.ptyProcess.kill();
+    session.shellProcess.kill();
   } catch {
     // ignore
   }
@@ -228,7 +328,7 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
         : Array.isArray(raw)
         ? Buffer.concat(raw)
         : Buffer.from(raw as ArrayBuffer);
-      session.ptyProcess.write(buf.toString("utf-8"));
+      session.shellProcess.write(buf.toString("utf-8"));
       return;
     }
     const rawText =
@@ -242,11 +342,11 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
     try {
       const msg = JSON.parse(rawText);
       if (msg.type === "input") {
-        session.ptyProcess.write(msg.data || "");
+        session.shellProcess.write(msg.data || "");
         return;
       }
       if (msg.type === "resize") {
-        session.ptyProcess.resize(Math.max(1, msg.cols || 80), Math.max(1, msg.rows || 24));
+        session.shellProcess.resize(Math.max(1, msg.cols || 80), Math.max(1, msg.rows || 24));
         return;
       }
       if (msg.type === "close_session") {
@@ -262,7 +362,7 @@ export function spawnTerminal(ws: WebSocket, options: SpawnTerminalOptions): voi
         return;
       }
     } catch {
-      session.ptyProcess.write(rawText);
+      session.shellProcess.write(rawText);
     }
   });
 

@@ -1,3 +1,4 @@
+import "./env";
 import { Router, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 

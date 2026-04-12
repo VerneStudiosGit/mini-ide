@@ -7,7 +7,7 @@ import { getFileType, formatSize } from "../utils/fileUtils";
 
 type ViewMode = "grid" | "tree";
 
-const DATA_DIR = import.meta.env.VITE_DATA_DIR || "/data";
+const INITIAL_DATA_DIR = import.meta.env.VITE_DATA_DIR || "";
 
 function FolderIcon() {
   return (
@@ -67,7 +67,8 @@ interface FileExplorerProps {
 }
 
 export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
-  const [currentPath, setCurrentPath] = useState("/");
+  const [rootPath, setRootPath] = useState(INITIAL_DATA_DIR);
+  const [currentPath, setCurrentPath] = useState(INITIAL_DATA_DIR || "/");
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<FsEntry | null>(null);
@@ -91,10 +92,12 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
     [token]
   );
 
-  const loadDir = useCallback(async (dirPath: string) => {
+  const loadDir = useCallback(async (dirPath?: string) => {
     setLoading(true);
     try {
-      const res = await authFetch(`/api/fs/list?path=${encodeURIComponent(dirPath)}`);
+      const target = dirPath ?? "";
+      const query = target ? `?path=${encodeURIComponent(target)}` : "";
+      const res = await authFetch(`/api/fs/list${query}`);
       const data = await res.json();
       if (data.error) {
         alert(data.error);
@@ -102,15 +105,18 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
         return;
       }
       setCurrentPath(data.path);
+      if (!rootPath || target === rootPath || target === "") {
+        setRootPath(data.path);
+      }
       setEntries(data.entries || []);
     } catch {
       alert("Error loading directory");
     }
     setLoading(false);
-  }, [authFetch]);
+  }, [authFetch, rootPath]);
 
   useEffect(() => {
-    loadDir(DATA_DIR);
+    loadDir(INITIAL_DATA_DIR || undefined);
   }, [loadDir]);
 
   // Close "Nuevo" dropdown on outside click
@@ -156,8 +162,9 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
   );
 
   const goUp = () => {
+    if (currentPath === rootPath) return;
     const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
-    loadDir(parent);
+    loadDir(parent.startsWith(rootPath) ? parent : rootPath);
   };
 
   const breadcrumbs = currentPath.split("/").filter(Boolean);
@@ -457,12 +464,12 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
               </svg>
             </button>
             <button
-              onClick={() => loadDir("/")}
+              onClick={() => loadDir(rootPath || undefined)}
               className="px-1 hover:text-sky-300 text-sky-400 transition-colors shrink-0"
             >
               /
             </button>
-            {breadcrumbs.map((seg, i) => {
+            {breadcrumbs.map((seg: string, i: number) => {
               const segPath = "/" + breadcrumbs.slice(0, i + 1).join("/");
               return (
                 <span key={segPath} className="flex items-center gap-1 shrink-0">
@@ -520,7 +527,7 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
         /* Tree view */
         <FileTreeView
           token={token}
-          rootPath={DATA_DIR}
+          rootPath={rootPath}
           onOpenFile={(entry) => {
             const fileType = getFileType(entry.name);
             if (fileType === "text" && onOpenFile) {

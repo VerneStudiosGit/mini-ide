@@ -4,6 +4,7 @@ client/node_modules/
 
 # Build output
 client/dist/
+data/
 
 # TypeScript cache
 *.tsbuildinfo
@@ -11,3 +12,5 @@ client/tsconfig.tsbuildinfo
 
 # OS files
 .DS_Store
+
+.env.local

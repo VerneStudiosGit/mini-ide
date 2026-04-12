@@ -5,12 +5,18 @@ import { CodeEditor } from "./components/CodeEditor";
 import { EditorTabs } from "./components/EditorTabs";
 import { LoginScreen } from "./components/LoginScreen";
 import { PreviewWindow } from "./components/PreviewWindow";
-import { ThemeCustomizer } from "./components/ThemeCustomizer";
+import { PreferencesPanel } from "./components/PreferencesPanel";
 import { applyTheme, DEFAULT_THEME, IdeTheme, loadTheme, saveTheme } from "./theme";
 import { FsEntry } from "./types";
+import { VoiceNoteSummary } from "./components/VoiceNoteSettings";
 
-type RightTab = "terminal" | "theme" | "editor";
-type MobileTab = "files" | "terminal" | "theme" | "editor";
+type RightTab = "terminal" | "preferences" | "editor";
+type MobileTab = "files" | "terminal" | "preferences" | "editor";
+
+const DEFAULT_VOICE_NOTE_SUMMARY: VoiceNoteSummary = {
+  enabled: false,
+  hasApiKey: false,
+};
 
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("auth_token") || "");
@@ -31,6 +37,7 @@ export default function App() {
   const [theme, setTheme] = useState<IdeTheme>(() => loadTheme());
   const [openFile, setOpenFile] = useState<FsEntry | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  const [voiceNoteSummary, setVoiceNoteSummary] = useState<VoiceNoteSummary>(DEFAULT_VOICE_NOTE_SUMMARY);
 
   useEffect(() => {
     applyTheme(theme);
@@ -40,6 +47,20 @@ export default function App() {
   useEffect(() => {
     if (!token) return;
     document.cookie = `mini_ide_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
+  }, [token]);
+
+  const loadPreferences = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch("/api/preferences", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("cannot load preferences");
+      const data = await res.json();
+      setVoiceNoteSummary(data.voiceNote || DEFAULT_VOICE_NOTE_SUMMARY);
+    } catch {
+      setVoiceNoteSummary(DEFAULT_VOICE_NOTE_SUMMARY);
+    }
   }, [token]);
 
   // Apply branding (icon + title) to DOM
@@ -69,6 +90,10 @@ export default function App() {
   useEffect(() => {
     applyBranding();
   }, [applyBranding]);
+
+  useEffect(() => {
+    loadPreferences();
+  }, [loadPreferences]);
 
   useEffect(() => {
     const onResize = () => {
@@ -167,14 +192,14 @@ export default function App() {
         </button>
         <button
           onClick={() => {
-            setRightTab("theme");
-            setMobileTab("theme");
+            setRightTab("preferences");
+            setMobileTab("preferences");
           }}
           className={`px-2.5 py-1 text-xs rounded transition-colors ${
-            mobileTab === "theme" ? "ide-tab-active" : "ide-tab"
+            mobileTab === "preferences" ? "ide-tab-active" : "ide-tab"
           }`}
         >
-          Marca
+          Preferencias
         </button>
         <div className="flex-1" />
         <button
@@ -245,12 +270,12 @@ export default function App() {
               Terminal
             </button>
             <button
-              onClick={() => setRightTab("theme")}
+              onClick={() => setRightTab("preferences")}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${
-                rightTab === "theme" ? "ide-tab-active" : "ide-tab"
+                rightTab === "preferences" ? "ide-tab-active" : "ide-tab"
               }`}
             >
-              Marca
+              Preferencias
             </button>
           </div>
 
@@ -282,15 +307,17 @@ export default function App() {
             </div>
           </div>
           <div className={rightTab === "terminal" ? "h-full" : "hidden"}>
-            <Terminal token={token} />
+            <Terminal token={token} voiceNoteEnabled={voiceNoteSummary.enabled && voiceNoteSummary.hasApiKey} />
           </div>
-          <div className={rightTab === "theme" ? "h-full" : "hidden"}>
-            <ThemeCustomizer
+          <div className={rightTab === "preferences" ? "h-full" : "hidden"}>
+            <PreferencesPanel
               theme={theme}
-              onChange={setTheme}
-              onReset={() => setTheme(DEFAULT_THEME)}
+              onThemeChange={setTheme}
+              onThemeReset={() => setTheme(DEFAULT_THEME)}
               token={token}
               onBrandingChange={applyBranding}
+              voiceNoteSummary={voiceNoteSummary}
+              onVoiceNoteChange={setVoiceNoteSummary}
             />
           </div>
         </div>

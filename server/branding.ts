@@ -2,10 +2,11 @@ import { Router } from "express";
 import fs from "fs/promises";
 import path from "path";
 import { requireAuth } from "./auth";
+import { getDataDir } from "./dataDir";
 
 export const brandingRouter = Router();
 
-const DATA_DIR = process.env.DATA_DIR || "/data";
+const DATA_DIR = getDataDir();
 const BRANDING_DIR = path.join(DATA_DIR, ".mini-ide");
 const ICON_PATH = path.join(BRANDING_DIR, "icon.png");
 const CONFIG_PATH = path.join(BRANDING_DIR, "branding.json");

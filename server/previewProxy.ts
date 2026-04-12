@@ -118,7 +118,8 @@ function rewriteCssBody(rawCss: string, port: number): string {
 }
 
 export function previewHttpProxy(req: Request, res: Response): void {
-  const port = parsePreviewPort(req.params.port || "");
+  const rawPort = Array.isArray(req.params.port) ? req.params.port[0] : req.params.port;
+  const port = parsePreviewPort(rawPort || "");
   if (!port) {
     res.status(400).json({ error: "Puerto invalido o no permitido" });
     return;

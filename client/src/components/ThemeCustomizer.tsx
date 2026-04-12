@@ -123,7 +123,7 @@ export function ThemeCustomizer({ theme, onChange, onReset, token, onBrandingCha
           {/* Header */}
           <div className="flex items-center justify-between gap-3 mb-5">
             <div>
-              <h2 className="text-base font-semibold ide-text">Marca de la instancia</h2>
+              <h2 className="text-base font-semibold ide-text">Marca</h2>
               <p className="text-sm ide-muted">Personaliza la identidad y apariencia de este entorno</p>
             </div>
             <button

@@ -1,6 +1,7 @@
-import "dotenv/config";
+import "./env";
 import express from "express";
 import { createServer } from "http";
+import type { Socket } from "net";
 import { WebSocketServer } from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -9,6 +10,7 @@ import { spawnTerminal, listTerminalSessions, closeTerminalSession } from "./ter
 import { filesystemRouter } from "./filesystem";
 import { authRouter, requireAuth, isValidToken, getTokenFromAuthSources } from "./auth";
 import { brandingRouter, generateManifest } from "./branding";
+import { preferencesRouter } from "./preferences";
 import { previewHttpProxy, proxyPreviewWebSocket } from "./previewProxy";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,12 +54,14 @@ app.delete("/api/terminal/sessions/:sessionId", requireAuth, (req, res) => {
     res.status(401).json({ error: "No autorizado" });
     return;
   }
-  const closed = closeTerminalSession(token, req.params.sessionId);
+  const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+  const closed = closeTerminalSession(token, sessionId || "");
   res.json({ ok: true, closed });
 });
 
 // Branding routes (public reads, auth-protected writes)
 app.use("/api/branding", brandingRouter);
+app.use("/api/preferences", preferencesRouter);
 
 // Internal preview proxy for local ports
 app.use("/_preview/:port", requireAuth, previewHttpProxy);
@@ -125,7 +129,7 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  const handled = proxyPreviewWebSocket(req, socket, head);
+  const handled = proxyPreviewWebSocket(req, socket as Socket, head);
   if (!handled) {
     socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
     socket.destroy();

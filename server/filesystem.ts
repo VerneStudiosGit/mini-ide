@@ -1,13 +1,14 @@
 import { Router } from "express";
 import fs from "fs/promises";
 import path from "path";
+import { getDataDir } from "./dataDir";
 
 export const filesystemRouter = Router();
 
 // List directory contents
 filesystemRouter.get("/list", async (req, res) => {
   try {
-    const dirPath = (req.query.path as string) || process.env.DATA_DIR || "/";
+    const dirPath = (req.query.path as string) || getDataDir();
     const resolved = path.resolve(dirPath);
     const entries = await fs.readdir(resolved, { withFileTypes: true });
 
