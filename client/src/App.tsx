@@ -4,10 +4,11 @@ import { Terminal } from "./components/Terminal";
 import { CodeEditor } from "./components/CodeEditor";
 import { EditorTabs } from "./components/EditorTabs";
 import { LoginScreen } from "./components/LoginScreen";
-import { PreviewWindow } from "./components/PreviewWindow";
+import { DEFAULT_PREVIEW_URL, PreviewWindow } from "./components/PreviewWindow";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { applyTheme, DEFAULT_THEME, IdeTheme, loadTheme, saveTheme } from "./theme";
 import { FsEntry } from "./types";
+import { BrowserSummary } from "./components/BrowserSettings";
 import { VoiceNoteSummary } from "./components/VoiceNoteSettings";
 
 type RightTab = "terminal" | "preferences" | "editor";
@@ -16,6 +17,10 @@ type MobileTab = "files" | "terminal" | "preferences" | "editor";
 const DEFAULT_VOICE_NOTE_SUMMARY: VoiceNoteSummary = {
   enabled: false,
   hasApiKey: false,
+};
+
+const DEFAULT_BROWSER_SUMMARY: BrowserSummary = {
+  homeUrl: DEFAULT_PREVIEW_URL,
 };
 
 export default function App() {
@@ -37,6 +42,7 @@ export default function App() {
   const [theme, setTheme] = useState<IdeTheme>(() => loadTheme());
   const [openFile, setOpenFile] = useState<FsEntry | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  const [browserSummary, setBrowserSummary] = useState<BrowserSummary>(DEFAULT_BROWSER_SUMMARY);
   const [voiceNoteSummary, setVoiceNoteSummary] = useState<VoiceNoteSummary>(DEFAULT_VOICE_NOTE_SUMMARY);
 
   useEffect(() => {
@@ -58,8 +64,15 @@ export default function App() {
       if (!res.ok) throw new Error("cannot load preferences");
       const data = await res.json();
       setVoiceNoteSummary(data.voiceNote || DEFAULT_VOICE_NOTE_SUMMARY);
+      setBrowserSummary({
+        homeUrl:
+          typeof data.browserHomeUrl === "string" && data.browserHomeUrl.trim()
+            ? data.browserHomeUrl
+            : DEFAULT_PREVIEW_URL,
+      });
     } catch {
       setVoiceNoteSummary(DEFAULT_VOICE_NOTE_SUMMARY);
+      setBrowserSummary(DEFAULT_BROWSER_SUMMARY);
     }
   }, [token]);
 
@@ -316,6 +329,8 @@ export default function App() {
               onThemeReset={() => setTheme(DEFAULT_THEME)}
               token={token}
               onBrandingChange={applyBranding}
+              browserSummary={browserSummary}
+              onBrowserChange={setBrowserSummary}
               voiceNoteSummary={voiceNoteSummary}
               onVoiceNoteChange={setVoiceNoteSummary}
             />
@@ -323,7 +338,9 @@ export default function App() {
         </div>
       </div>
 
-      {showPreview && <PreviewWindow onClose={() => setShowPreview(false)} />}
+      {showPreview && (
+        <PreviewWindow onClose={() => setShowPreview(false)} initialUrl={browserSummary.homeUrl} />
+      )}
     </div>
   );
 }

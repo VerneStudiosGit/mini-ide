@@ -1,14 +1,15 @@
 import { useRef, useState, useCallback } from "react";
 
-const DEFAULT_URL = "https://example.com/";
+export const DEFAULT_PREVIEW_URL = "https://example.com/";
 
 interface PreviewWindowProps {
   onClose: () => void;
+  initialUrl?: string;
 }
 
-function normalizePreviewUrl(rawInput: string): string {
+export function normalizePreviewUrl(rawInput: string): string {
   const input = rawInput.trim();
-  if (!input) return DEFAULT_URL;
+  if (!input) return DEFAULT_PREVIEW_URL;
 
   if (/^\d{1,5}$/.test(input)) {
     return `/_preview/${input}/`;
@@ -32,9 +33,9 @@ function normalizePreviewUrl(rawInput: string): string {
   return `https://${input}`;
 }
 
-export function PreviewWindow({ onClose }: PreviewWindowProps) {
+export function PreviewWindow({ onClose, initialUrl = DEFAULT_PREVIEW_URL }: PreviewWindowProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [url, setUrl] = useState(DEFAULT_URL);
+  const [url, setUrl] = useState(() => normalizePreviewUrl(initialUrl));
 
   const handleRefresh = useCallback(() => {
     if (iframeRef.current) {
@@ -118,7 +119,7 @@ export function PreviewWindow({ onClose }: PreviewWindowProps) {
 
       <iframe
         ref={iframeRef}
-        src={DEFAULT_URL}
+        src={normalizePreviewUrl(initialUrl)}
         className="flex-1 w-full border-none bg-white"
         sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-navigation"
         allow="clipboard-read; clipboard-write"

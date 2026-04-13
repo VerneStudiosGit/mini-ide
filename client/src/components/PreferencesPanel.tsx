@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { IdeTheme } from "../theme";
 import { ThemeCustomizer } from "./ThemeCustomizer";
+import { BrowserSettings, BrowserSummary } from "./BrowserSettings";
 import { VoiceNoteSettings, VoiceNoteSummary } from "./VoiceNoteSettings";
 
-type PreferencesSection = "brand" | "voice-note";
+type PreferencesSection = "brand" | "browser" | "voice-note";
 
 interface PreferencesPanelProps {
   theme: IdeTheme;
@@ -11,6 +12,8 @@ interface PreferencesPanelProps {
   onThemeReset: () => void;
   token: string;
   onBrandingChange?: () => void;
+  browserSummary: BrowserSummary;
+  onBrowserChange: (summary: BrowserSummary) => void;
   voiceNoteSummary: VoiceNoteSummary;
   onVoiceNoteChange: (summary: VoiceNoteSummary) => void;
 }
@@ -21,6 +24,8 @@ export function PreferencesPanel({
   onThemeReset,
   token,
   onBrandingChange,
+  browserSummary,
+  onBrowserChange,
   voiceNoteSummary,
   onVoiceNoteChange,
 }: PreferencesPanelProps) {
@@ -33,6 +38,7 @@ export function PreferencesPanel({
         <div className="space-y-1">
           {[
             { id: "brand", label: "Marca", detail: "Nombre, icono y colores" },
+            { id: "browser", label: "Navegador", detail: "URL inicial por defecto" },
             { id: "voice-note", label: "Voice Note", detail: "Grabacion y Whisper" },
           ].map((item) => {
             const active = section === item.id;
@@ -63,6 +69,8 @@ export function PreferencesPanel({
             token={token}
             onBrandingChange={onBrandingChange}
           />
+        ) : section === "browser" ? (
+          <BrowserSettings token={token} summary={browserSummary} onChange={onBrowserChange} />
         ) : (
           <VoiceNoteSettings token={token} summary={voiceNoteSummary} onChange={onVoiceNoteChange} />
         )}

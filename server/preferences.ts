@@ -12,6 +12,7 @@ const PREFERENCES_DIR = path.join(DATA_DIR, ".mini-ide");
 const PREFERENCES_PATH = path.join(PREFERENCES_DIR, "preferences.json");
 const OPENAI_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions";
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
+const DEFAULT_BROWSER_HOME_URL = "https://example.com/";
 
 interface VoiceNoteSettings {
   enabled: boolean;
@@ -20,6 +21,7 @@ interface VoiceNoteSettings {
 
 interface PreferencesConfig {
   voiceNote: VoiceNoteSettings;
+  browserHomeUrl: string;
 }
 
 interface PublicPreferences {
@@ -27,6 +29,7 @@ interface PublicPreferences {
     enabled: boolean;
     hasApiKey: boolean;
   };
+  browserHomeUrl: string;
 }
 
 const DEFAULT_PREFERENCES: PreferencesConfig = {
@@ -34,6 +37,7 @@ const DEFAULT_PREFERENCES: PreferencesConfig = {
     enabled: false,
     encryptedApiKey: null,
   },
+  browserHomeUrl: DEFAULT_BROWSER_HOME_URL,
 };
 
 function getEncryptionKey(): Buffer {
@@ -91,6 +95,10 @@ async function loadPreferences(): Promise<PreferencesConfig> {
         enabled: Boolean(parsed.voiceNote?.enabled),
         encryptedApiKey: parsed.voiceNote?.encryptedApiKey || null,
       },
+      browserHomeUrl:
+        typeof parsed.browserHomeUrl === "string" && parsed.browserHomeUrl.trim()
+          ? parsed.browserHomeUrl
+          : DEFAULT_PREFERENCES.browserHomeUrl,
     };
   } catch {
     return {
@@ -98,6 +106,7 @@ async function loadPreferences(): Promise<PreferencesConfig> {
         enabled: DEFAULT_PREFERENCES.voiceNote.enabled,
         encryptedApiKey: DEFAULT_PREFERENCES.voiceNote.encryptedApiKey,
       },
+      browserHomeUrl: DEFAULT_PREFERENCES.browserHomeUrl,
     };
   }
 }
@@ -113,6 +122,7 @@ function toPublicPreferences(config: PreferencesConfig): PublicPreferences {
       enabled: config.voiceNote.enabled,
       hasApiKey: Boolean(config.voiceNote.encryptedApiKey),
     },
+    browserHomeUrl: config.browserHomeUrl,
   };
 }
 
@@ -161,6 +171,27 @@ preferencesRouter.put("/voice-note", requireAuth, async (req, res) => {
     }
 
     preferences.voiceNote.enabled = enabled;
+    await savePreferences(preferences);
+    res.json({ ok: true, preferences: toPublicPreferences(preferences) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+preferencesRouter.put("/browser-home-url", requireAuth, async (req, res) => {
+  try {
+    const { homeUrl } = req.body as {
+      homeUrl?: unknown;
+    };
+
+    if (typeof homeUrl !== "string") {
+      return res.status(400).json({ error: "homeUrl must be a string" });
+    }
+
+    const nextHomeUrl = homeUrl.trim() || DEFAULT_BROWSER_HOME_URL;
+
+    const preferences = await loadPreferences();
+    preferences.browserHomeUrl = nextHomeUrl;
     await savePreferences(preferences);
     res.json({ ok: true, preferences: toPublicPreferences(preferences) });
   } catch (err: any) {
