@@ -209,7 +209,7 @@ export function ThemeCustomizer({ theme, onChange, onReset, token, onBrandingCha
                 </label>
               ))}
             </div>
-            <p className="text-xs ide-muted mt-3">Los colores se guardan en este navegador</p>
+            <p className="text-xs ide-muted mt-3">Los colores se guardan en preferencias globales de esta instancia</p>
           </div>
         </div>
       </div>

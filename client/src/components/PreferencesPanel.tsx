@@ -3,8 +3,9 @@ import { IdeTheme } from "../theme";
 import { ThemeCustomizer } from "./ThemeCustomizer";
 import { BrowserSettings, BrowserSummary } from "./BrowserSettings";
 import { VoiceNoteSettings, VoiceNoteSummary } from "./VoiceNoteSettings";
+import { StartupSettings, StartupSummary } from "./StartupSettings";
 
-type PreferencesSection = "brand" | "browser" | "voice-note";
+type PreferencesSection = "brand" | "browser" | "voice-note" | "startup";
 
 interface PreferencesPanelProps {
   theme: IdeTheme;
@@ -16,6 +17,8 @@ interface PreferencesPanelProps {
   onBrowserChange: (summary: BrowserSummary) => void;
   voiceNoteSummary: VoiceNoteSummary;
   onVoiceNoteChange: (summary: VoiceNoteSummary) => void;
+  startupSummary: StartupSummary;
+  onStartupChange: (summary: StartupSummary) => void;
 }
 
 export function PreferencesPanel({
@@ -28,6 +31,8 @@ export function PreferencesPanel({
   onBrowserChange,
   voiceNoteSummary,
   onVoiceNoteChange,
+  startupSummary,
+  onStartupChange,
 }: PreferencesPanelProps) {
   const [section, setSection] = useState<PreferencesSection>("brand");
 
@@ -40,6 +45,7 @@ export function PreferencesPanel({
             { id: "brand", label: "Marca", detail: "Nombre, icono y colores" },
             { id: "browser", label: "Navegador", detail: "URL inicial por defecto" },
             { id: "voice-note", label: "Voice Note", detail: "Grabacion y Whisper" },
+            { id: "startup", label: "Startup", detail: "Comandos al iniciar contenedor" },
           ].map((item) => {
             const active = section === item.id;
             return (
@@ -71,8 +77,10 @@ export function PreferencesPanel({
           />
         ) : section === "browser" ? (
           <BrowserSettings token={token} summary={browserSummary} onChange={onBrowserChange} />
-        ) : (
+        ) : section === "voice-note" ? (
           <VoiceNoteSettings token={token} summary={voiceNoteSummary} onChange={onVoiceNoteChange} />
+        ) : (
+          <StartupSettings token={token} summary={startupSummary} onChange={onStartupChange} />
         )}
       </div>
     </div>

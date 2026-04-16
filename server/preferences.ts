@@ -19,9 +19,31 @@ interface VoiceNoteSettings {
   encryptedApiKey: string | null;
 }
 
+interface ThemeSettings {
+  bg: string;
+  panel: string;
+  panelSoft: string;
+  panelHover: string;
+  border: string;
+  text: string;
+  muted: string;
+  accent: string;
+  accentHover: string;
+}
+
+interface StartupSettings {
+  enabled: boolean;
+  aptUpdate: boolean;
+  aptUpgrade: boolean;
+  aptPackages: string[];
+  commands: string;
+}
+
 interface PreferencesConfig {
   voiceNote: VoiceNoteSettings;
   browserHomeUrl: string;
+  theme: ThemeSettings;
+  startup: StartupSettings;
 }
 
 interface PublicPreferences {
@@ -30,7 +52,21 @@ interface PublicPreferences {
     hasApiKey: boolean;
   };
   browserHomeUrl: string;
+  theme: ThemeSettings;
+  startup: StartupSettings;
 }
+
+const DEFAULT_THEME: ThemeSettings = {
+  bg: "#0a0a0b",
+  panel: "#121214",
+  panelSoft: "#1a1a1d",
+  panelHover: "#242429",
+  border: "#34343a",
+  text: "#f5f5f5",
+  muted: "#b9b9c2",
+  accent: "#52525b",
+  accentHover: "#3f3f46",
+};
 
 const DEFAULT_PREFERENCES: PreferencesConfig = {
   voiceNote: {
@@ -38,7 +74,54 @@ const DEFAULT_PREFERENCES: PreferencesConfig = {
     encryptedApiKey: null,
   },
   browserHomeUrl: DEFAULT_BROWSER_HOME_URL,
+  theme: DEFAULT_THEME,
+  startup: {
+    enabled: false,
+    aptUpdate: true,
+    aptUpgrade: false,
+    aptPackages: [],
+    commands: "",
+  },
 };
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9A-Fa-f]{6}$/.test(value);
+}
+
+function normalizeTheme(raw: Partial<ThemeSettings> | null | undefined): ThemeSettings {
+  return {
+    bg: isHexColor(raw?.bg) ? raw.bg : DEFAULT_THEME.bg,
+    panel: isHexColor(raw?.panel) ? raw.panel : DEFAULT_THEME.panel,
+    panelSoft: isHexColor(raw?.panelSoft) ? raw.panelSoft : DEFAULT_THEME.panelSoft,
+    panelHover: isHexColor(raw?.panelHover) ? raw.panelHover : DEFAULT_THEME.panelHover,
+    border: isHexColor(raw?.border) ? raw.border : DEFAULT_THEME.border,
+    text: isHexColor(raw?.text) ? raw.text : DEFAULT_THEME.text,
+    muted: isHexColor(raw?.muted) ? raw.muted : DEFAULT_THEME.muted,
+    accent: isHexColor(raw?.accent) ? raw.accent : DEFAULT_THEME.accent,
+    accentHover: isHexColor(raw?.accentHover) ? raw.accentHover : DEFAULT_THEME.accentHover,
+  };
+}
+
+function isValidAptPackageName(value: string): boolean {
+  return /^[a-z0-9][a-z0-9+.-]*$/i.test(value);
+}
+
+function normalizeStartup(raw: Partial<StartupSettings> | null | undefined): StartupSettings {
+  const aptPackages = Array.isArray(raw?.aptPackages)
+    ? raw.aptPackages
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0 && isValidAptPackageName(item))
+    : [];
+
+  return {
+    enabled: Boolean(raw?.enabled),
+    aptUpdate: raw?.aptUpdate === undefined ? DEFAULT_PREFERENCES.startup.aptUpdate : Boolean(raw.aptUpdate),
+    aptUpgrade: Boolean(raw?.aptUpgrade),
+    aptPackages: Array.from(new Set(aptPackages)).slice(0, 120),
+    commands: typeof raw?.commands === "string" ? raw.commands.slice(0, 12000) : "",
+  };
+}
 
 function getEncryptionKey(): Buffer {
   const basis =
@@ -99,6 +182,8 @@ async function loadPreferences(): Promise<PreferencesConfig> {
         typeof parsed.browserHomeUrl === "string" && parsed.browserHomeUrl.trim()
           ? parsed.browserHomeUrl
           : DEFAULT_PREFERENCES.browserHomeUrl,
+      theme: normalizeTheme(parsed.theme),
+      startup: normalizeStartup(parsed.startup),
     };
   } catch {
     return {
@@ -107,6 +192,8 @@ async function loadPreferences(): Promise<PreferencesConfig> {
         encryptedApiKey: DEFAULT_PREFERENCES.voiceNote.encryptedApiKey,
       },
       browserHomeUrl: DEFAULT_PREFERENCES.browserHomeUrl,
+      theme: DEFAULT_THEME,
+      startup: DEFAULT_PREFERENCES.startup,
     };
   }
 }
@@ -123,6 +210,8 @@ function toPublicPreferences(config: PreferencesConfig): PublicPreferences {
       hasApiKey: Boolean(config.voiceNote.encryptedApiKey),
     },
     browserHomeUrl: config.browserHomeUrl,
+    theme: config.theme,
+    startup: config.startup,
   };
 }
 
@@ -192,6 +281,51 @@ preferencesRouter.put("/browser-home-url", requireAuth, async (req, res) => {
 
     const preferences = await loadPreferences();
     preferences.browserHomeUrl = nextHomeUrl;
+    await savePreferences(preferences);
+    res.json({ ok: true, preferences: toPublicPreferences(preferences) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+preferencesRouter.put("/theme", requireAuth, async (req, res) => {
+  try {
+    const { theme } = req.body as {
+      theme?: unknown;
+    };
+
+    if (typeof theme !== "object" || theme === null) {
+      return res.status(400).json({ error: "theme must be an object" });
+    }
+
+    const preferences = await loadPreferences();
+    preferences.theme = normalizeTheme(theme as Partial<ThemeSettings>);
+    await savePreferences(preferences);
+    res.json({ ok: true, preferences: toPublicPreferences(preferences) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+preferencesRouter.put("/startup", requireAuth, async (req, res) => {
+  try {
+    const { startup } = req.body as {
+      startup?: unknown;
+    };
+
+    if (typeof startup !== "object" || startup === null) {
+      return res.status(400).json({ error: "startup must be an object" });
+    }
+
+    const normalized = normalizeStartup(startup as Partial<StartupSettings>);
+    if (normalized.aptPackages.length === 0 && normalized.commands.trim() === "" && normalized.enabled) {
+      return res.status(400).json({
+        error: "Activa Startup solo cuando tengas paquetes apt o comandos configurados.",
+      });
+    }
+
+    const preferences = await loadPreferences();
+    preferences.startup = normalized;
     await savePreferences(preferences);
     res.json({ ok: true, preferences: toPublicPreferences(preferences) });
   } catch (err: any) {

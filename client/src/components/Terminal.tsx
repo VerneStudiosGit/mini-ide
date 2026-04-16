@@ -817,7 +817,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       <div className="flex items-center flex-wrap gap-1 px-2 py-1 bg-blue-900/40 border-b border-blue-800 shrink-0">
         <button
           onClick={() => createSession()}
-          className="w-9 h-9 flex items-center justify-center rounded-md bg-blue-800/40 hover:bg-blue-700 text-blue-300 hover:text-white transition-colors shrink-0"
+          className="w-9 h-9 flex items-center justify-center rounded-md ide-panel-soft ide-icon-button transition-colors shrink-0"
           title="Nueva terminal"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -828,7 +828,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         <button
           onClick={openRenameDialog}
           disabled={activeId == null}
-          className="w-9 h-9 flex items-center justify-center rounded-md bg-blue-800/40 hover:bg-blue-700 text-blue-300 hover:text-white transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-9 h-9 flex items-center justify-center rounded-md ide-panel-soft ide-icon-button transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
           title="Renombrar terminal activa"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -838,7 +838,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
 
         <button
           onClick={() => setShowShortcuts(true)}
-          className="w-9 h-9 flex items-center justify-center rounded-md bg-blue-800/40 hover:bg-blue-700 text-blue-300 hover:text-white transition-colors shrink-0"
+          className="w-9 h-9 flex items-center justify-center rounded-md ide-panel-soft ide-icon-button transition-colors shrink-0"
           title="Ver atajos de teclado"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -846,11 +846,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
           </svg>
         </button>
 
-        <div className="w-px h-4 bg-blue-700 mx-1 shrink-0" />
+        <div className="w-px h-4 ide-divider mx-1 shrink-0" />
 
         <button
           onClick={() => setShowInputOverlay(true)}
-          className="w-9 h-9 flex items-center justify-center rounded-md bg-blue-800/40 hover:bg-blue-700 text-blue-300 hover:text-white transition-colors shrink-0"
+          className="w-9 h-9 flex items-center justify-center rounded-md ide-panel-soft ide-icon-button transition-colors shrink-0"
           title="Abrir input rapido"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1061,7 +1061,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
                 <div className="text-sm font-semibold ide-text">Atajos de teclado</div>
                 <button
                   onClick={() => setShowShortcuts(false)}
-                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-blue-800/50 text-blue-300 hover:text-white"
+                  className="w-6 h-6 flex items-center justify-center rounded ide-icon-button transition-colors"
                   title="Cerrar"
                 >
                   ×

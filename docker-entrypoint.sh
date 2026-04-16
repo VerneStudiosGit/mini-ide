@@ -7,48 +7,106 @@ export DATA_DIR
 # Fix ownership of ${DATA_DIR} (may have been created by root on volume mount)
 sudo chown -R mini-ide:mini-ide "${DATA_DIR}" 2>/dev/null || true
 
-# Persist Claude Code and Codex auth/config across redeploys by storing
-# them on the mounted volume and symlinking from the user's home. Without
-# this, every new container image ships with a fresh /home/mini-ide and
-# the user has to re-login on every deploy.
-#
-# Claude Code → ~/.claude/ (dir) + ~/.claude.json (file)
-# Codex       → ~/.codex/  (dir)
-persist_home_path() {
-  # $1 = path under $HOME (e.g. ".claude"), $2 = "dir" or "file"
-  local rel="$1" kind="$2"
-  local home="/home/mini-ide"
-  local src="${DATA_DIR}/home/$rel"
-  local dst="$home/$rel"
+# Persist the full HOME directory across redeploys. This makes user-level
+# installs/config survive image updates (npm/pip user installs, dotfiles,
+# local CLIs, auth files, etc.).
+HOME_DIR="/home/mini-ide"
+PERSIST_HOME="${DATA_DIR}/home"
+export HOME="$HOME_DIR"
 
-  sudo -u mini-ide mkdir -p "${DATA_DIR}/home"
+sudo -u mini-ide mkdir -p "${PERSIST_HOME}"
 
-  # First deploy: seed ${DATA_DIR} from whatever the image/user already has.
-  if [ ! -e "$src" ] && [ -e "$dst" ] && [ ! -L "$dst" ]; then
-    sudo -u mini-ide mv "$dst" "$src"
+# First deploy: seed persistent HOME with whatever the image has in /home/mini-ide.
+# On later deploys the marker exists and we keep the existing persisted data.
+if [ ! -e "${PERSIST_HOME}/.mini-ide-home-initialized" ] && [ -d "${HOME_DIR}" ] && [ ! -L "${HOME_DIR}" ]; then
+  sudo -u mini-ide cp -a "${HOME_DIR}/." "${PERSIST_HOME}/" 2>/dev/null || true
+  sudo -u mini-ide touch "${PERSIST_HOME}/.mini-ide-home-initialized"
+fi
+
+# Replace /home/mini-ide with a symlink to the persisted HOME on the volume.
+if [ ! -L "${HOME_DIR}" ] || [ "$(readlink "${HOME_DIR}")" != "${PERSIST_HOME}" ]; then
+  sudo rm -rf "${HOME_DIR}"
+  sudo -u mini-ide ln -s "${PERSIST_HOME}" "${HOME_DIR}"
+fi
+
+# Prefer user-level install locations so tools survive redeploys.
+export NPM_CONFIG_PREFIX="${HOME}/.npm-global"
+export PIP_USER=1
+export PATH="${HOME}/.npm-global/bin:${HOME}/.local/bin:${PATH}"
+sudo -u mini-ide mkdir -p "${HOME}/.npm-global" "${HOME}/.local/bin" "${HOME}/.cache"
+
+# Optional startup provisioning (persisted in preferences.json under "startup")
+# Runs before the app boots so packages/tools are ready in every redeploy.
+STARTUP_PREFS_PATH="${DATA_DIR}/.mini-ide/preferences.json"
+STARTUP_LOG_PATH="${DATA_DIR}/.mini-ide/startup.log"
+mkdir -p "$(dirname "${STARTUP_LOG_PATH}")"
+
+if [ -f "${STARTUP_PREFS_PATH}" ]; then
+  eval "$(
+    node -e '
+      const fs = require("fs");
+      const path = process.argv[1];
+      let parsed = {};
+      try {
+        parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+      } catch {}
+      const startup = parsed && typeof parsed === "object" ? parsed.startup || {} : {};
+      const bool = (v, d = false) => (typeof v === "boolean" ? v : d);
+      const pkgs = Array.isArray(startup.aptPackages)
+        ? startup.aptPackages.filter((v) => typeof v === "string").map((v) => v.trim()).filter(Boolean)
+        : [];
+      const commands = typeof startup.commands === "string" ? startup.commands : "";
+      const out = {
+        enabled: bool(startup.enabled, false) ? "1" : "0",
+        aptUpdate: bool(startup.aptUpdate, true) ? "1" : "0",
+        aptUpgrade: bool(startup.aptUpgrade, false) ? "1" : "0",
+        pkgsB64: Buffer.from(pkgs.join("\n"), "utf8").toString("base64"),
+        commandsB64: Buffer.from(commands, "utf8").toString("base64"),
+      };
+      for (const [k, v] of Object.entries(out)) {
+        process.stdout.write(`STARTUP_${k}=${JSON.stringify(v)}\n`);
+      }
+    ' "${STARTUP_PREFS_PATH}"
+  )"
+
+  if [ "${STARTUP_enabled}" = "1" ]; then
+    {
+      echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Startup provisioning: begin"
+
+      if [ "${STARTUP_aptUpdate}" = "1" ]; then
+        echo "[startup] apt-get update"
+        apt-get update
+      fi
+
+      if [ "${STARTUP_aptUpgrade}" = "1" ]; then
+        echo "[startup] apt-get upgrade -y"
+        DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+      fi
+
+      STARTUP_PACKAGES_TEXT="$(printf "%s" "${STARTUP_pkgsB64}" | base64 -d 2>/dev/null || true)"
+      if [ -n "${STARTUP_PACKAGES_TEXT}" ]; then
+        mapfile -t STARTUP_PKG_ARRAY < <(printf "%s\n" "${STARTUP_PACKAGES_TEXT}" | sed "/^$/d")
+        if [ "${#STARTUP_PKG_ARRAY[@]}" -gt 0 ]; then
+          echo "[startup] apt-get install -y ${STARTUP_PKG_ARRAY[*]}"
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${STARTUP_PKG_ARRAY[@]}"
+        fi
+      fi
+
+      STARTUP_COMMANDS="$(printf "%s" "${STARTUP_commandsB64}" | base64 -d 2>/dev/null || true)"
+      if [ -n "${STARTUP_COMMANDS}" ]; then
+        echo "[startup] custom commands"
+        STARTUP_SCRIPT="/tmp/mini-ide-startup-commands.sh"
+        printf "%s\n" "${STARTUP_COMMANDS}" > "${STARTUP_SCRIPT}"
+        chmod +x "${STARTUP_SCRIPT}"
+        bash "${STARTUP_SCRIPT}"
+      fi
+
+      echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Startup provisioning: done"
+    } >> "${STARTUP_LOG_PATH}" 2>&1 || {
+      echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Startup provisioning: failed (continuing boot)" >> "${STARTUP_LOG_PATH}"
+    }
   fi
-
-  # Make sure the target exists on the volume. For directories we create
-  # them eagerly. For files we deliberately do NOT touch an empty file —
-  # some CLIs (Claude Code) expect ~/.claude.json to either not exist or
-  # contain valid JSON, and an empty file errors on first run. Leaving
-  # the symlink dangling is fine: writing through it will create the
-  # real file on the volume.
-  if [ "$kind" = "dir" ] && [ ! -e "$src" ]; then
-    sudo -u mini-ide mkdir -p "$src"
-  fi
-
-  # Replace anything at $dst with a symlink to the volume copy.
-  if [ ! -L "$dst" ] || [ "$(readlink "$dst")" != "$src" ]; then
-    sudo rm -rf "$dst"
-    sudo -u mini-ide ln -s "$src" "$dst"
-  fi
-}
-
-persist_home_path ".claude"      dir
-persist_home_path ".claude.json" file
-persist_home_path ".codex"       dir
-persist_home_path ".aws"         dir
+fi
 
 # Auto-login to GitHub CLI if GITHUB_TOKEN is set
 if [ -n "$GITHUB_TOKEN" ]; then

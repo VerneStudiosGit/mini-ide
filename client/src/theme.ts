@@ -10,8 +10,6 @@ export interface IdeTheme {
   accentHover: string;
 }
 
-export const THEME_STORAGE_KEY = "mini_ide_theme";
-
 export const DEFAULT_THEME: IdeTheme = {
   bg: "#0a0a0b",
   panel: "#121214",
@@ -42,20 +40,6 @@ export function normalizeTheme(raw: Partial<IdeTheme> | null | undefined): IdeTh
     accent: isHexColor(raw.accent || "") ? raw.accent! : DEFAULT_THEME.accent,
     accentHover: isHexColor(raw.accentHover || "") ? raw.accentHover! : DEFAULT_THEME.accentHover,
   };
-}
-
-export function loadTheme(): IdeTheme {
-  try {
-    const raw = localStorage.getItem(THEME_STORAGE_KEY);
-    if (!raw) return DEFAULT_THEME;
-    return normalizeTheme(JSON.parse(raw));
-  } catch {
-    return DEFAULT_THEME;
-  }
-}
-
-export function saveTheme(theme: IdeTheme): void {
-  localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(theme));
 }
 
 export function applyTheme(theme: IdeTheme): void {

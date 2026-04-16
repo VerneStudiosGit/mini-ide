@@ -11,6 +11,7 @@ A lightweight, web-based IDE designed for easy deployment on a VPS or Railway. P
 - **Browser Preview** — Built-in iframe browser for previewing web apps
 - **Theming** — Customizable color scheme with live preview
 - **Branding** — Custom instance name and icon (shows in browser tab and PWA)
+- **Startup Provisioning** — Optional boot-time `apt` + custom commands from Preferences
 - **PWA** — Installable as a Progressive Web App
 - **Authentication** — Token-based auth with configurable credentials
 
@@ -47,6 +48,32 @@ Default credentials: `admin` / `admin`
 docker build -t mini-ide .
 docker run -p 3000:3000 -v mini-ide-data:/data mini-ide
 ```
+
+### Persistence Model (Important)
+
+When running with a mounted `/data` volume, this project now persists the full user home directory (`/home/mini-ide`) inside the volume (`/data/home`).
+
+This means user-level installs/configs survive redeploys/merges, for example:
+
+- `~/.codex`, `~/.claude`, `~/.aws`, dotfiles
+- npm user-global installs (`~/.npm-global`)
+- pip user installs (`~/.local`)
+
+You can also configure boot-time provisioning in **Preferences → Startup**:
+
+- optional `apt-get update`
+- optional `apt-get upgrade -y`
+- apt package list (one per line, e.g. `bubblewrap`)
+- custom bash commands
+
+Boot provisioning runs on every restart/deploy and writes logs to:
+
+- `/data/.mini-ide/startup.log`
+
+System-level changes do **not** persist across redeploys because they live in the container image layer, for example:
+
+- `apt install ...`
+- files written under `/usr`, `/etc`, `/opt` (outside `/data`)
 
 ### Railway
 

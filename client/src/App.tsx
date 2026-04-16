@@ -6,10 +6,11 @@ import { EditorTabs } from "./components/EditorTabs";
 import { LoginScreen } from "./components/LoginScreen";
 import { DEFAULT_PREVIEW_URL, PreviewWindow } from "./components/PreviewWindow";
 import { PreferencesPanel } from "./components/PreferencesPanel";
-import { applyTheme, DEFAULT_THEME, IdeTheme, loadTheme, saveTheme } from "./theme";
+import { applyTheme, DEFAULT_THEME, IdeTheme, normalizeTheme } from "./theme";
 import { FsEntry } from "./types";
 import { BrowserSummary } from "./components/BrowserSettings";
 import { VoiceNoteSummary } from "./components/VoiceNoteSettings";
+import { StartupSummary } from "./components/StartupSettings";
 
 type RightTab = "terminal" | "preferences" | "editor";
 type MobileTab = "files" | "terminal" | "preferences" | "editor";
@@ -21,6 +22,14 @@ const DEFAULT_VOICE_NOTE_SUMMARY: VoiceNoteSummary = {
 
 const DEFAULT_BROWSER_SUMMARY: BrowserSummary = {
   homeUrl: DEFAULT_PREVIEW_URL,
+};
+
+const DEFAULT_STARTUP_SUMMARY: StartupSummary = {
+  enabled: false,
+  aptUpdate: true,
+  aptUpgrade: false,
+  aptPackages: [],
+  commands: "",
 };
 
 export default function App() {
@@ -39,16 +48,36 @@ export default function App() {
   const [showPreview, setShowPreview] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("terminal");
   const [mobileTab, setMobileTab] = useState<MobileTab>("files");
-  const [theme, setTheme] = useState<IdeTheme>(() => loadTheme());
+  const [theme, setTheme] = useState<IdeTheme>(DEFAULT_THEME);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [openFile, setOpenFile] = useState<FsEntry | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [browserSummary, setBrowserSummary] = useState<BrowserSummary>(DEFAULT_BROWSER_SUMMARY);
   const [voiceNoteSummary, setVoiceNoteSummary] = useState<VoiceNoteSummary>(DEFAULT_VOICE_NOTE_SUMMARY);
+  const [startupSummary, setStartupSummary] = useState<StartupSummary>(DEFAULT_STARTUP_SUMMARY);
 
   useEffect(() => {
     applyTheme(theme);
-    saveTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!token || !preferencesLoaded) return;
+    const timeout = window.setTimeout(async () => {
+      try {
+        await fetch("/api/preferences/theme", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ theme }),
+        });
+      } catch {
+        // ignore
+      }
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [theme, token, preferencesLoaded]);
 
   useEffect(() => {
     if (!token) return;
@@ -70,9 +99,23 @@ export default function App() {
             ? data.browserHomeUrl
             : DEFAULT_PREVIEW_URL,
       });
+      setTheme(normalizeTheme(data.theme));
+      setStartupSummary({
+        enabled: Boolean(data.startup?.enabled),
+        aptUpdate: data.startup?.aptUpdate === undefined ? true : Boolean(data.startup?.aptUpdate),
+        aptUpgrade: Boolean(data.startup?.aptUpgrade),
+        aptPackages: Array.isArray(data.startup?.aptPackages)
+          ? data.startup.aptPackages.filter((item: unknown): item is string => typeof item === "string")
+          : [],
+        commands: typeof data.startup?.commands === "string" ? data.startup.commands : "",
+      });
     } catch {
       setVoiceNoteSummary(DEFAULT_VOICE_NOTE_SUMMARY);
       setBrowserSummary(DEFAULT_BROWSER_SUMMARY);
+      setTheme(DEFAULT_THEME);
+      setStartupSummary(DEFAULT_STARTUP_SUMMARY);
+    } finally {
+      setPreferencesLoaded(true);
     }
   }, [token]);
 
@@ -333,6 +376,8 @@ export default function App() {
               onBrowserChange={setBrowserSummary}
               voiceNoteSummary={voiceNoteSummary}
               onVoiceNoteChange={setVoiceNoteSummary}
+              startupSummary={startupSummary}
+              onStartupChange={setStartupSummary}
             />
           </div>
         </div>

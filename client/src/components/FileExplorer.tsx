@@ -360,10 +360,10 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
         <div className="flex-1" />
 
         {/* View toggle */}
-        <div className="flex items-center gap-0.5 bg-blue-800/50 rounded p-0.5">
+        <div className="flex items-center gap-0.5 ide-panel-soft rounded p-0.5 border ide-border">
           <button
             onClick={() => handleToggleView("grid")}
-            className={`p-1 rounded transition-colors ${viewMode === "grid" ? "bg-blue-700 text-sky-300" : "text-blue-400 hover:text-sky-300"}`}
+            className={`p-1 rounded transition-colors ${viewMode === "grid" ? "ide-tab-active" : "ide-tab"}`}
             title="Vista de cuadricula"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -372,7 +372,7 @@ export function FileExplorer({ token, onOpenFile }: FileExplorerProps) {
           </button>
           <button
             onClick={() => handleToggleView("tree")}
-            className={`p-1 rounded transition-colors ${viewMode === "tree" ? "bg-blue-700 text-sky-300" : "text-blue-400 hover:text-sky-300"}`}
+            className={`p-1 rounded transition-colors ${viewMode === "tree" ? "ide-tab-active" : "ide-tab"}`}
             title="Vista de arbol"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
