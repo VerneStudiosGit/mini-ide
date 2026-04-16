@@ -29,6 +29,19 @@ if [ ! -L "${HOME_DIR}" ] || [ "$(readlink "${HOME_DIR}")" != "${PERSIST_HOME}" 
   sudo -u mini-ide ln -s "${PERSIST_HOME}" "${HOME_DIR}"
 fi
 
+# Repair ownership/permissions for persisted HOME. Older deployments or
+# one-off root commands may leave files unreadable for mini-ide, which
+# breaks tools like codex/claude when writing config.
+sudo chown -R mini-ide:mini-ide "${PERSIST_HOME}" 2>/dev/null || true
+sudo -u mini-ide mkdir -p \
+  "${HOME}/.config" \
+  "${HOME}/.cache" \
+  "${HOME}/.local/bin" \
+  "${HOME}/.codex" \
+  "${HOME}/.claude"
+sudo -u mini-ide touch "${HOME}/.bashrc" "${HOME}/.profile"
+sudo chmod -R u+rwX "${PERSIST_HOME}" 2>/dev/null || true
+
 # Prefer user-level install locations so tools survive redeploys.
 export NPM_CONFIG_PREFIX="${HOME}/.npm-global"
 export PIP_USER=1
