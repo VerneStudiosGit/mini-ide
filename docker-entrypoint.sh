@@ -121,6 +121,11 @@ if [ -f "${STARTUP_PREFS_PATH}" ]; then
   fi
 fi
 
+# Startup provisioning can create root-owned files under persisted HOME.
+# Normalize ownership again so terminal user can run codex/claude reliably.
+sudo chown -R mini-ide:mini-ide "${PERSIST_HOME}" 2>/dev/null || true
+sudo chmod -R u+rwX "${PERSIST_HOME}" 2>/dev/null || true
+
 # Auto-login to GitHub CLI if GITHUB_TOKEN is set
 if [ -n "$GITHUB_TOKEN" ]; then
   sudo -u mini-ide bash -c "echo '$GITHUB_TOKEN' | gh auth login --with-token 2>/dev/null || true"
