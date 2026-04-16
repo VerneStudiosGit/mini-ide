@@ -94,6 +94,11 @@ System-level changes do **not** persist across redeploys because they live in th
 | `ANTHROPIC_API_KEY` | — | Required for Claude Code |
 | `OPENAI_API_KEY` | — | Required for OpenAI Codex |
 
+Notes:
+
+- On platforms without persistent volumes (for example some DigitalOcean App Platform setups), set `DATA_DIR` to a writable path such as `/tmp/mini-ide-data`.
+- Branding/theme/preferences need write access to `DATA_DIR`.
+
 ## Project Structure
 
 ```
