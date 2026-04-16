@@ -7,6 +7,9 @@ function ensureWritableDir(dirPath: string): boolean {
   try {
     fs.mkdirSync(dirPath, { recursive: true });
     fs.accessSync(dirPath, fs.constants.W_OK);
+    const stateDir = path.join(dirPath, ".mini-ide");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.accessSync(stateDir, fs.constants.W_OK);
     return true;
   } catch {
     return false;
