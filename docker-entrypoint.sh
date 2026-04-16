@@ -26,7 +26,7 @@ fi
 # Replace /home/mini-ide with a symlink to the persisted HOME on the volume.
 if [ ! -L "${HOME_DIR}" ] || [ "$(readlink "${HOME_DIR}")" != "${PERSIST_HOME}" ]; then
   sudo rm -rf "${HOME_DIR}"
-  sudo -u mini-ide ln -s "${PERSIST_HOME}" "${HOME_DIR}"
+  ln -s "${PERSIST_HOME}" "${HOME_DIR}"
 fi
 
 # Repair ownership/permissions for persisted HOME. Older deployments or
